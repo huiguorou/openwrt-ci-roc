@@ -106,6 +106,20 @@ jobs:
     - name: Download DL Package(下载DL软件包)
       run: |
         cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
+        
+        # --- 🚀 强制注入基础依赖与内核模块 (防止被清理) ---
+        echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_libncurses=y" >> $OPENWRT_PATH/.config
+        
+        # --- 🚀 强制注入 5G 路由器必备驱动 ---
+        echo "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-mhi-net=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-mhi-pci-generic=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_modemmanager=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_luci-app-modemband=y" >> $OPENWRT_PATH/.config
+        
         cd $OPENWRT_PATH
         make defconfig
         make download -j$(nproc)
