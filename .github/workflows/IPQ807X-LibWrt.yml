@@ -109,6 +109,14 @@ jobs:
       run: |
         cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
         
+        # --- 🧹 彻底清理旧配置中的其他代理插件及核心 (斩草除根) ---
+        sed -i '/passwall/d' $OPENWRT_PATH/.config
+        sed -i '/openclash/d' $OPENWRT_PATH/.config
+        sed -i '/xray/d' $OPENWRT_PATH/.config
+        sed -i '/v2ray/d' $OPENWRT_PATH/.config
+        sed -i '/sing-box/d' $OPENWRT_PATH/.config
+        sed -i '/shadowsocks/d' $OPENWRT_PATH/.config
+        
         # --- 🚀 强制注入基础依赖与内核模块 ---
         echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
