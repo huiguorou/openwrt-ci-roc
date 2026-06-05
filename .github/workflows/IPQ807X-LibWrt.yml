@@ -40,19 +40,21 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -y update
-        # 修复错误1：补全基础编译依赖，防止 Golang 或其他包打包失败
         sudo -E apt-get -y install upx-ucl build-essential
         sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
         
-        # 修复错误1扩展：为防止编译 Nikki/Mihomo 时内存溢出，强行增加 8GB 虚拟内存
+        # --- 🚀 修复占用报错：先卸载旧 Swap，再重新分配 8GB ---
+        sudo swapoff /swapfile || true
+        sudo rm -f /swapfile || true
+        
+        # 创建新的 8GB 虚拟内存
         sudo fallocate -l 8G /swapfile
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
         free -h
-
     - name: Checkout(检出代码)
       uses: actions/checkout@main
 
