@@ -38,6 +38,7 @@ rm -rf package/QModem
 rm -rf package/feeds/packages/onionshare-cli
 rm -rf package/feeds/packages/lxc
 rm -rf feeds/packages/net/geoview
+rm -rf feeds/packages/utils/yq
 
 # 3. 移除源自带的旧版本包，准备替换新版
 rm -rf feeds/luci/applications/luci-app-argon-config
