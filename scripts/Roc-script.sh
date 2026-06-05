@@ -58,41 +58,18 @@ rm -rf feeds/packages/net/nginx
 rm -rf feeds/packages/net/frp
 
 # =========================================================
-# 拯救 Nikki：强制降级 yq 到稳定的 4.44.3 版本 (绕过 Go 1.25 报错)
+# 拯救 Nikki：从官方稳定分支提取健康的 yq 源码 (绕过高版本 Go 编译报错)
 # =========================================================
 rm -rf feeds/packages/utils/yq
-mkdir -p feeds/packages/utils/yq
-cat << 'EOF' > feeds/packages/utils/yq/Makefile
-include $(TOPDIR)/rules.mk
 
-PKG_NAME:=yq
-PKG_VERSION:=4.44.3
-PKG_RELEASE:=1
+# 拉取官方 23.05 稳定版 packages 仓库到临时目录
+git clone --depth=1 -b openwrt-23.05 https://github.com/openwrt/packages.git /tmp/stable_packages
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/mikefarah/yq/tar.gz/v$(PKG_VERSION)?
-PKG_HASH:=2c700cb755ab2b4e477af94f2dd73909100eab86687c427321bbecbb05f2590d
+# 将稳定版的 yq 源码完整复制过来替换
+cp -r /tmp/stable_packages/utils/yq feeds/packages/utils/yq
 
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
-PKG_BUILD_DEPENDS:=golang/host
-PKG_BUILD_FLAGS:=no-mips16
-
-GO_PKG:=github.com/mikefarah/yq/v4
-
-include $(INCLUDE_DIR)/package.mk
-include ../../lang/golang/golang-package.mk
-
-define Package/yq
-  SECTION:=utils
-  CATEGORY:=Utilities
-  TITLE:=yq
-  URL:=https://mikefarah.gitbook.io/yq/
-  DEPENDS:=$(GO_ARCH_DEPENDS)
-endef
-
-$(eval $(call GoBinPackage,yq))
-$(eval $(call BuildPackage,yq))
-EOF
+# 清理临时文件，释放空间
+rm -rf /tmp/stable_packages
 
 # =========================================================
 # 引入第三方插件与工具
