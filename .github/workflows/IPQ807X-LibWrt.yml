@@ -116,6 +116,7 @@ jobs:
         sed -i '/v2ray/d' $OPENWRT_PATH/.config
         sed -i '/sing-box/d' $OPENWRT_PATH/.config
         sed -i '/shadowsocks/d' $OPENWRT_PATH/.config
+        sed -i '/yq/d' $OPENWRT_PATH/.config
         
         # --- 🚀 强制注入基础依赖与内核模块 ---
         echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
