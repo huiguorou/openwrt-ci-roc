@@ -3,8 +3,6 @@ name: IPQ807X-LibWrt
 on:
   workflow_dispatch:
   workflow_call:
-  # schedule:
-  #   - cron: "0 18 * * *"
 
 env:
   REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
@@ -40,6 +38,8 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -y update
+        # 补全基础编译依赖，防止 Golang 或其他包打包失败
+        sudo -E apt-get -y install upx-ucl build-essential
         sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
@@ -88,18 +88,17 @@ jobs:
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
           find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               find "$dir" -type f -exec touch {} +
-          done
+           done
         fi
 
     - name: Install Feeds(安装feeds)
       run: |
         cd $OPENWRT_PATH
-        # 在这里追加 Nikki 的官方源码
+        # 必须在 update 之前追加 Nikki 官方源码
         echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
-        
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-  
+ 
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         chmod +x $DIY_SCRIPT
@@ -110,18 +109,25 @@ jobs:
       run: |
         cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
         
-        # --- 🚀 强制注入基础依赖与内核模块 (防止被清理) ---
+        # --- 🚀 强制注入基础依赖与内核模块 ---
         echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_libncurses=y" >> $OPENWRT_PATH/.config
         
-        # --- 🚀 强制注入 5G 路由器必备驱动 ---
+        # --- 🚀 强制注入 5G 路由器必备驱动与管理 ---
         echo "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-mhi-net=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-mhi-pci-generic=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_modemmanager=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_luci-app-modemband=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_luci-proto-modemmanager=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_usbutils=y" >> $OPENWRT_PATH/.config
+        
+        # --- 🚀 强制注入 Nikki 及其核心依赖 ---
+        echo "CONFIG_PACKAGE_kmod-dummy=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_nikki=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_luci-app-nikki=y" >> $OPENWRT_PATH/.config
         
         cd $OPENWRT_PATH
         make defconfig
@@ -165,7 +171,6 @@ jobs:
         body: |
           **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息
-          - 这是开启全功能NSS的6.12内核固件，默认主题为Aurora；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、upnp、wol、samba4、vlmcsd、autoreboot、uhttpd、frps、frpc、diskman、hd-idle、acme、wireguard、watchcat、3cat、passwall，并添加了若干工具，具体详见IPQ807X.config和General.config。
           - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 OpenWrt 固件
           - ⚽ 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
