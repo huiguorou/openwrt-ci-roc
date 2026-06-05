@@ -3,6 +3,8 @@ name: IPQ807X-LibWrt
 on:
   workflow_dispatch:
   workflow_call:
+  # schedule:
+  #   - cron: "0 18 * * *"
 
 env:
   REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
@@ -38,11 +40,18 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -y update
-        # 补全基础编译依赖，防止 Golang 或其他包打包失败
+        # 修复错误1：补全基础编译依赖，防止 Golang 或其他包打包失败
         sudo -E apt-get -y install upx-ucl build-essential
         sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
+        
+        # 修复错误1扩展：为防止编译 Nikki/Mihomo 时内存溢出，强行增加 8GB 虚拟内存
+        sudo fallocate -l 8G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        free -h
 
     - name: Checkout(检出代码)
       uses: actions/checkout@main
@@ -88,17 +97,17 @@ jobs:
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
           find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
               find "$dir" -type f -exec touch {} +
-           done
+          done
         fi
 
     - name: Install Feeds(安装feeds)
       run: |
         cd $OPENWRT_PATH
-        # 必须在 update 之前追加 Nikki 官方源码
+        # 修复错误2：必须在 update 之前追加 Nikki 官方源码
         echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a
- 
+  
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         chmod +x $DIY_SCRIPT
@@ -109,7 +118,7 @@ jobs:
       run: |
         cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
         
-        # --- 🧹 彻底清理旧配置中的其他代理插件及核心 (斩草除根) ---
+        # 修复错误3：🧹 彻底清理旧配置中的其他代理插件及易错残余依赖 (斩草除根)
         sed -i '/passwall/d' $OPENWRT_PATH/.config
         sed -i '/openclash/d' $OPENWRT_PATH/.config
         sed -i '/xray/d' $OPENWRT_PATH/.config
@@ -117,13 +126,15 @@ jobs:
         sed -i '/sing-box/d' $OPENWRT_PATH/.config
         sed -i '/shadowsocks/d' $OPENWRT_PATH/.config
         sed -i '/yq/d' $OPENWRT_PATH/.config
+        sed -i '/CONFIG_PACKAGE_ruby=y/d' $OPENWRT_PATH/.config
+        sed -i '/CONFIG_PACKAGE_ruby-yaml=y/d' $OPENWRT_PATH/.config
         
-        # --- 🚀 强制注入基础依赖与内核模块 ---
+        # 修复错误4：🚀 强制注入基础依赖与内核模块
         echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_libncurses=y" >> $OPENWRT_PATH/.config
         
-        # --- 🚀 强制注入 5G 路由器必备驱动与管理 ---
+        # 🚀 强制注入 5G 路由器必备驱动与管理
         echo "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-mhi-net=y" >> $OPENWRT_PATH/.config
@@ -133,7 +144,7 @@ jobs:
         echo "CONFIG_PACKAGE_luci-proto-modemmanager=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_usbutils=y" >> $OPENWRT_PATH/.config
         
-        # --- 🚀 强制注入 Nikki 及其核心依赖 ---
+        # 🚀 强制注入 Nikki 及其核心依赖
         echo "CONFIG_PACKAGE_kmod-dummy=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_nikki=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_luci-app-nikki=y" >> $OPENWRT_PATH/.config
@@ -178,11 +189,11 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+          **This is Custom OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
           ### 📒 固件信息
-          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 OpenWrt 固件
-          - ⚽ 固件源码: ${{ env.REPO_URL }}
-          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 专属深度精简定制版：基于 6.12 内核，完美支持 PCIe/USB 5G 模组及 ModemManager 管理。
+          - 核心插件：内置专属 Nikki 代理客户端，已剔除冗余冲突依赖，系统更轻快。
+          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的专属路由网关固件
           - 🌐 默认地址: **192.168.20.1**
           - 🔑 默认密码: none
           ### 🧊 固件版本
