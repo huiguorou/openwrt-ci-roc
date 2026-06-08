@@ -32,9 +32,15 @@ rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
 # 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题 (核心修复)
-# 彻底移除系统库中存在死循环 BUG 的 mihomo 文件夹
-rm -rf feeds/packages/net/mihomo
-# 强行注入 Nikki 作者官方的稳定版 mihomo 核心到 package 目录 (优先级最高)
+# 彻底铲除所有带有递归 BUG 的 mihomo 源文件与软链接 (无视路径，全部剿灭)
+rm -rf package/feeds/*/mihomo
+rm -rf package/feeds/*/mihomo-alpha
+rm -rf package/feeds/*/mihomo-meta
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo" -exec rm -rf {} +
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo-alpha" -exec rm -rf {} +
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo-meta" -exec rm -rf {} +
+
+# 清理完成后，强行注入 Nikki 作者官方的稳定版 mihomo 核心到 package 目录 (优先级最高)
 git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
 cp -r /tmp/nikki_repo/mihomo package/mihomo
 rm -rf /tmp/nikki_repo
@@ -42,7 +48,7 @@ rm -rf /tmp/nikki_repo
 # 3. 彻底清理残余的上层插件及其系统软链接 (无死角清理)
 find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
 find ./ -name "netspeedtest" | xargs rm -rf
-find ./ -name "QModem" | xargs rm -rf
+# find ./ -name "QModem" | xargs rm -rf
 find ./ -name "onionshare-cli" | xargs rm -rf
 find ./ -name "luci-app-passwall*" | xargs rm -rf
 find ./ -name "passwall-packages" | xargs rm -rf
