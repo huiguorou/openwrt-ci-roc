@@ -21,7 +21,7 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
                 }, [ 'Built by Jacob $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
             ]),#" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
 
-# 修改默认主题为 Argon
+# 修改默认主题为 Aurora
 sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/Makefile
 
 # =========================================================
@@ -31,19 +31,24 @@ sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
-# 2. 清理产生依赖警告且不需要的冗余软件包 (测速, 旧5G管理, 容器, 多余代理层等)
-rm -rf feeds/luci/applications/luci-app-netspeedtest
-rm -rf package/netspeedtest
-rm -rf package/QModem
-rm -rf package/feeds/packages/onionshare-cli
-rm -rf package/feeds/packages/lxc
-rm -rf feeds/packages/net/geoview
-rm -rf feeds/luci/applications/luci-app-lxc
-rm -rf feeds/packages/system/rpcd-mod-lxc
-rm -rf package/luci-app-passwall
-rm -rf package/luci-app-passwall2
-rm -rf package/passwall-packages
-rm -rf package/luci-app-wechatpush
+# 2. 终极清理：全盘搜索并物理删除冲突的冗余包与快捷方式 (消灭死循环与警告)
+# 解决 mihomo 递归依赖死循环 (Nikki 自带核心，强行剔除系统源里的变种)
+find ./ -name "mihomo" | xargs rm -rf
+find ./ -name "mihomo-alpha" | xargs rm -rf
+find ./ -name "mihomo-meta" | xargs rm -rf
+
+# 彻底清理残余的上层插件及其系统软链接 (无死角清理)
+find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
+find ./ -name "netspeedtest" | xargs rm -rf
+find ./ -name "QModem" | xargs rm -rf
+find ./ -name "onionshare-cli" | xargs rm -rf
+find ./ -name "luci-app-passwall*" | xargs rm -rf
+find ./ -name "passwall-packages" | xargs rm -rf
+find ./ -name "luci-app-lxc" | xargs rm -rf
+find ./ -name "rpcd-mod-lxc" | xargs rm -rf
+find ./ -name "lxc" -type d | xargs rm -rf
+find ./ -name "geoview" | xargs rm -rf
+find ./ -name "luci-app-wechatpush" | xargs rm -rf
 
 # 3. 移除源自带的旧版本包，准备通过 Git 克隆替换新版
 rm -rf feeds/luci/applications/luci-app-argon-config
