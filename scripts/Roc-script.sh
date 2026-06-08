@@ -31,13 +31,15 @@ sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
-# 2. 终极清理：全盘搜索并物理删除冲突的冗余包与快捷方式 (消灭死循环与警告)
+# 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题 (核心修复)
+# 彻底移除系统库中存在死循环 BUG 的 mihomo 文件夹
+rm -rf feeds/packages/net/mihomo
+# 强行注入 Nikki 作者官方的稳定版 mihomo 核心到 package 目录 (优先级最高)
+git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
+cp -r /tmp/nikki_repo/mihomo package/mihomo
+rm -rf /tmp/nikki_repo
 
-# 解决 mihomo 递归依赖死循环 (保留基础版 mihomo 供 nikki 依赖，只物理删除引发死循环的变种)
-find ./ -name "mihomo-alpha" | xargs rm -rf
-find ./ -name "mihomo-meta" | xargs rm -rf
-
-# 彻底清理残余的上层插件及其系统软链接 (无死角清理)
+# 3. 彻底清理残余的上层插件及其系统软链接 (无死角清理)
 find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
 find ./ -name "netspeedtest" | xargs rm -rf
 find ./ -name "QModem" | xargs rm -rf
@@ -50,7 +52,7 @@ find ./ -name "lxc" -type d | xargs rm -rf
 find ./ -name "geoview" | xargs rm -rf
 find ./ -name "luci-app-wechatpush" | xargs rm -rf
 
-# 3. 移除源自带的旧版本包，准备通过 Git 克隆替换新版
+# 4. 移除源自带的旧版本包，准备通过 Git 克隆替换新版
 rm -rf feeds/luci/applications/luci-app-argon-config
 rm -rf feeds/luci/applications/luci-app-appfilter
 rm -rf feeds/luci/applications/luci-app-frpc
