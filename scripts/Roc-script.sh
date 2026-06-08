@@ -32,8 +32,8 @@ rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
 # 2. 终极清理：全盘搜索并物理删除冲突的冗余包与快捷方式 (消灭死循环与警告)
-# 解决 mihomo 递归依赖死循环 (Nikki 自带核心，强行剔除系统源里的变种)
-find ./ -name "mihomo" | xargs rm -rf
+
+# 解决 mihomo 递归依赖死循环 (保留基础版 mihomo 供 nikki 依赖，只物理删除引发死循环的变种)
 find ./ -name "mihomo-alpha" | xargs rm -rf
 find ./ -name "mihomo-meta" | xargs rm -rf
 
