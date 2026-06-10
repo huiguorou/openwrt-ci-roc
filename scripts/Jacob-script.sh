@@ -13,9 +13,28 @@ echo "===> 2. 注入 Inseego FG2000 设备树 (DTS)..."
 mkdir -p target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
 cp $GITHUB_WORKSPACE/ipq8072a-inseego-fg2000.dts target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
 
-echo "===> 3. 注册 FG2000 编译节点..."
-sed -i '/define Device\/qcom_ipq807x_generic/i\define Device/inseego_fg2000\n  DEVICE_VENDOR := Inseego\n  DEVICE_MODEL := FG2000\n  DEVICE_PACKAGES := kmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-drv-pppoe kmod-qca-nss-ecm\nendef\nTARGET_DEVICES += inseego_fg2000\n' target/linux/ipq807x/image/generic.mk
+echo "===> 3. 提取 Inseego FG2000 设备树 (DTS)..."
+mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/
+cp temp_laipeng/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/*fg2000*.dts target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ 2>/dev/null
 
+echo "===> 4. 注册 FG2000 编译节点..."
+# 动态提取我们刚复制过来的 DTS 文件名 (去掉路径和 .dts 后缀)
+DTS_FILENAME=$(ls temp_laipeng/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/*fg2000*.dts | head -n 1 | awk -F'/' '{print $NF}' | sed 's/\.dts//')
+
+# 安全地将机型配置追加到 Makefile 尾部 (使用动态抓取的 DTS 名字)
+cat >> target/linux/qualcommax/image/ipq807x.mk <<EOF
+
+define Device/inseego_fg2000
+  DEVICE_VENDOR := Inseego
+  DEVICE_MODEL := FG2000
+  DEVICE_DTS := qcom/\${DTS_FILENAME}
+  DEVICE_PACKAGES := kmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-drv-pppoe kmod-qca-nss-ecm kmod-shortcut-fe
+endef
+TARGET_DEVICES += inseego_fg2000
+EOF
+
+# 销毁临时素材库
+rm -rf temp_laipeng
 
 # =========================================================
 # 系统底层信息修改
