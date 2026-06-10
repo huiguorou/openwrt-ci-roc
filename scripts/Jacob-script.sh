@@ -57,4 +57,105 @@ rm -rf temp_laipeng
 # 系统底层信息修改
 # =========================================================
 # 修改默认IP & 固件名称
-sed -i 's/
+sed -i 's/192.168.1.1/192.168.20.1/g' package/base-files/files/bin/config_generate
+sed -i "s/hostname='.*'/hostname='JacobWrt'/g" package/base-files/files/bin/config_generate
+
+# 修改编译署名和时间 (单行防断行容错版)
+BUILD_DATE=$(date +'%Y-%m-%d %H:%M:%S')
+sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.release\.description + ' / ' : '') + (luciversion || ''),#_('Firmware Version'), E('span', {}, [ (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || '') + ' / ', E('a', { href: 'https://github.com/laipeng668/openwrt-ci-roc/releases', target: '_blank', rel: 'noopener noreferrer' }, [ 'Built by Jacob ${BUILD_DATE}' ]) ]),#g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
+
+# 修改默认主题为 Aurora
+sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/Makefile
+
+# =========================================================
+# 依赖清理与环境优化 (极简瘦身)
+# =========================================================
+# 1. 移除旧版 Golang，替换为 sbwml 优化的 Golang 1.22+
+rm -rf feeds/packages/lang/golang
+git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
+
+# 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题
+rm -rf package/feeds/*/mihomo
+rm -rf package/feeds/*/mihomo-alpha
+rm -rf package/feeds/*/mihomo-meta
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo" -exec rm -rf {} +
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo-alpha" -exec rm -rf {} +
+find ./feeds ./package -maxdepth 6 -type d -name "mihomo-meta" -exec rm -rf {} +
+
+# 重新注入稳定版 mihomo 核心 (带智能路径识别)
+echo "===> 正在注入 Mihomo 核心依赖..."
+git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
+if [ -d "/tmp/nikki_repo/mihomo" ]; then
+    cp -r /tmp/nikki_repo/mihomo package/mihomo
+else
+    cp -r /tmp/nikki_repo package/mihomo
+fi
+rm -rf /tmp/nikki_repo
+
+# 3. 彻底清理残余的上层插件及其系统软链接
+find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
+find ./ -name "netspeedtest" | xargs rm -rf
+find ./ -name "onionshare-cli" | xargs rm -rf
+find ./ -name "luci-app-passwall*" | xargs rm -rf
+find ./ -name "passwall-packages" | xargs rm -rf
+find ./ -name "luci-app-lxc" | xargs rm -rf
+find ./ -name "rpcd-mod-lxc" | xargs rm -rf
+find ./ -name "lxc" -type d | xargs rm -rf
+find ./ -name "geoview" | xargs rm -rf
+find ./ -name "luci-app-wechatpush" | xargs rm -rf
+
+# 4. 移除源自带的旧版本包，准备替换
+rm -rf feeds/luci/applications/luci-app-argon-config
+rm -rf feeds/luci/applications/luci-app-appfilter
+rm -rf feeds/luci/applications/luci-app-frpc
+rm -rf feeds/luci/applications/luci-app-frps
+rm -rf feeds/luci/themes/luci-theme-argon
+rm -rf feeds/packages/net/open-app-filter
+rm -rf feeds/packages/net/ariang
+rm -rf feeds/packages/net/aria2
+rm -rf feeds/packages/net/nginx
+rm -rf feeds/packages/net/frp
+
+# =========================================================
+# 拯救 Nikki：从官方稳定分支提取健康的 yq 源码
+# =========================================================
+rm -rf feeds/packages/utils/yq
+git clone --depth=1 -b openwrt-23.05 https://github.com/openwrt/packages.git /tmp/stable_packages
+cp -r /tmp/stable_packages/utils/yq feeds/packages/utils/yq
+rm -rf /tmp/stable_packages
+
+# =========================================================
+# 引入第三方插件与工具
+# =========================================================
+# Git稀疏克隆函数
+function git_sparse_clone() {
+  branch="$1" repourl="$2" && shift 2
+  git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
+  repodir=$(echo $repourl | awk -F '/' '{print $(NF)}')
+  cd $repodir && git sparse-checkout set $@
+  mv -f $@ ../package
+  cd .. && rm -rf $repodir
+}
+
+# 基础下载与穿透工具
+git_sparse_clone aria2 https://github.com/laipeng668/packages net/aria2
+mv -f package/aria2 feeds/packages/net/aria2
+git_sparse_clone nginx https://github.com/laipeng668/packages net/nginx
+mv -f package/nginx feeds/packages/net/nginx
+git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
+mv -f package/ariang feeds/packages/net/ariang
+git_sparse_clone frp-binary https://github.com/laipeng668/packages net/frp
+mv -f package/frp feeds/packages/net/frp
+git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-frpc applications/luci-app-frps
+mv -f package/luci-app-frpc feeds/luci/applications/luci-app-frpc
+mv -f package/luci-app-frps feeds/luci/applications/luci-app-frps
+
+# UI与功能拓展
+git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon
+git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config feeds/luci/applications/luci-app-argon-config
+git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
+git clone --depth=1 https://github.com/eamonxg/luci-app-aurora-config feeds/luci/applications/luci-app-aurora-config
+git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist2
+git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
+git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+git clone --depth=1 https://github.com/laipeng668/luci-app-gecoosac package/luci-app-gecoosac
