@@ -1,30 +1,36 @@
 #!/bin/bash
 
 # =========================================================
-# 1. 纯净硬件配置：放弃外部内核补丁，仅保留 DTS 注入
+# 硬件核心：Inseego FG2000 适配 (已修复路径重复错误)
 # =========================================================
 echo "===> 正在准备纯净编译环境..."
-# 获取最新的 DTS 资源
+# 1. 提取 DTS
 git clone --depth 1 https://github.com/laipeng668/openwrt-6.x.git temp_laipeng
 mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/
 DTS_FILE=$(find temp_laipeng/target/linux/ -name "*fg2000*.dts" -o -name "*inseego*.dts" | head -n 1)
-[ -n "$DTS_FILE" ] && cp "$DTS_FILE" target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-fg2000.dts
+
+# 将 DTS 文件强制复制到标准路径
+if [ -n "$DTS_FILE" ]; then
+    cp "$DTS_FILE" target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-fg2000.dts
+fi
 rm -rf temp_laipeng
 
 echo "===> 正在注册 FG2000 编译节点..."
+# 确保 image mk 文件中正确注册 FG2000
+# 注意：这里 DEVICE_DTS 填写 ipq8072-fg2000，系统会自动处理前缀
 cat >> target/linux/qualcommax/image/ipq807x.mk <<EOF
 
 define Device/inseego_fg2000
   DEVICE_VENDOR := Inseego
   DEVICE_MODEL := FG2000
-  DEVICE_DTS := qcom/ipq8072-fg2000
+  DEVICE_DTS := ipq8072-fg2000
   DEVICE_PACKAGES := kmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-drv-pppoe kmod-qca-nss-ecm kmod-shortcut-fe
 endef
 TARGET_DEVICES += inseego_fg2000
 EOF
 
 # =========================================================
-# 2. 系统底层信息修改
+# 系统底层信息修改
 # =========================================================
 echo "===> 正在优化系统配置..."
 ./scripts/feeds update -a
@@ -35,18 +41,18 @@ sed -i "s/hostname='.*'/hostname='JacobWrt'/g" package/base-files/files/bin/conf
 sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.release\.description + ' / ' : '') + (luciversion || ''),#_('Firmware Version'), E('span', {}, [ (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || '') + ' / ', E('a', { href: 'https://github.com/laipeng668/openwrt-ci-roc/releases', target: '_blank', rel: 'noopener noreferrer' }, [ 'Built by Jacob $(date +'%Y-%m-%d')' ]) ]),#g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
 
 # =========================================================
-# 3. 依赖清理与递归依赖修复
+# 依赖清理与递归依赖修复
 # =========================================================
-# 移除会导致死锁的 Mihomo-meta/alpha 冲突
+# 移除会导致死锁的 Mihomo-meta/alpha 冲突，禁止自选依赖
 sed -i '/mihomo-meta/d' feeds/packages/net/mihomo/Makefile 2>/dev/null || true
 sed -i '/mihomo-alpha/d' feeds/packages/net/mihomo/Makefile 2>/dev/null || true
 sed -i '/CONFIG_PACKAGE_kmod-oaf/d' .config 2>/dev/null || true
 rm -rf tmp/info/ tmp/.config-package.in
 
 # =========================================================
-# 4. 插件注入
+# 插件注入
 # =========================================================
-# 注入 Mihomo
+# 注入稳定版 Mihomo 核心
 git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
 cp -r /tmp/nikki_repo/mihomo package/mihomo 2>/dev/null || cp -r /tmp/nikki_repo package/mihomo
 rm -rf /tmp/nikki_repo
