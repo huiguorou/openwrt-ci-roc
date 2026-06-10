@@ -9,7 +9,7 @@ on:
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-25.12
-  CONFIG_FILE: configs/IPQ807X.config
+  CONFIG_FILE: configs/inseego.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Jacob-script.sh
   CLASH_KERNEL: amd64
