@@ -3,25 +3,22 @@
 # =========================================================
 # 硬件核心：Inseego FG2000 适配与 NSS 补丁注入
 # =========================================================
-echo "===> 1. 拉取并应用高通 6.x NSS 核心优化补丁..."
+echo "===> 1. 拉取并应用高通 NSS 核心优化补丁..."
 git clone --depth 1 https://github.com/laipeng668/openwrt-6.x.git temp_laipeng
-cp -r temp_laipeng/target/linux/ipq807x/patches-6.* target/linux/ipq807x/
-rm -rf temp_laipeng
+mkdir -p target/linux/qualcommax/
+# 兼容处理：无论源仓库里叫 ipq807x 还是 qualcommax，都精准提取补丁到我们的 qualcommax 目录下
+cp -r temp_laipeng/target/linux/*/patches-6.* target/linux/qualcommax/ 2>/dev/null || true
 
-echo "===> 2. 注入 Inseego FG2000 设备树 (DTS)..."
-# 确保在云端 Actions 的工作空间中能找到你上传的 dts 文件
-mkdir -p target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
-cp $GITHUB_WORKSPACE/ipq8072a-inseego-fg2000.dts target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
-
-echo "===> 3. 提取 Inseego FG2000 设备树 (DTS)..."
+echo "===> 2. 提取 Inseego FG2000 设备树 (DTS)..."
 mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/
-cp temp_laipeng/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/*fg2000*.dts target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ 2>/dev/null
+# 兼容处理：无视源仓库目录名，精准抓取 FG2000 的 DTS 放入正确位置
+cp temp_laipeng/target/linux/*/files/arch/arm64/boot/dts/qcom/*fg2000*.dts target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ 2>/dev/null
 
-echo "===> 4. 注册 FG2000 编译节点..."
-# 动态提取我们刚复制过来的 DTS 文件名 (去掉路径和 .dts 后缀)
-DTS_FILENAME=$(ls temp_laipeng/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/*fg2000*.dts | head -n 1 | awk -F'/' '{print $NF}' | sed 's/\.dts//')
+echo "===> 3. 注册 FG2000 编译节点..."
+# 从我们刚复制好的正确目录中动态提取 DTS 文件名
+DTS_FILENAME=$(ls target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/*fg2000*.dts | head -n 1 | awk -F'/' '{print $NF}' | sed 's/\.dts//')
 
-# 安全地将机型配置追加到 Makefile 尾部 (使用动态抓取的 DTS 名字)
+# 安全地将机型配置追加到 Makefile 尾部
 cat >> target/linux/qualcommax/image/ipq807x.mk <<EOF
 
 define Device/inseego_fg2000
@@ -36,6 +33,12 @@ EOF
 # 销毁临时素材库
 rm -rf temp_laipeng
 
+# =========================================================
+# 系统底层信息修改 (这里往下接你原来的代码)
+# =========================================================
+# 修改默认IP & 固件名称
+sed -i 's/192.168.1.1/192.168.20.1/g' package/base-files/files/bin/config_generate
+...
 # =========================================================
 # 系统底层信息修改
 # =========================================================
