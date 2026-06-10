@@ -6,13 +6,10 @@
 echo "===> 1. 拉取并应用高通 NSS 核心优化补丁..."
 git clone --depth 1 https://github.com/laipeng668/openwrt-6.x.git temp_laipeng
 mkdir -p target/linux/qualcommax/
-# 兼容拷贝所有 qualcommax/ipq807x 补丁
 cp -r temp_laipeng/target/linux/*/patches-6.* target/linux/qualcommax/ 2>/dev/null || true
 
 echo "===> 2. 提取并注入 Inseego FG2000 设备树 (DTS)..."
 mkdir -p target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/
-
-# 智能查找：使用 find 命令在 laipeng668 仓库中地毯式搜索
 DTS_FILE=$(find temp_laipeng/target/linux/ -name "*fg2000*.dts" -o -name "*inseego*.dts" | head -n 1)
 
 if [ -n "$DTS_FILE" ]; then
@@ -23,21 +20,17 @@ else
     echo "⚠️ 未在 LiBwrt 中找到独立 DTS 文件，尝试从本地仓库根目录寻找..."
     DTS_FILE_LOCAL=$(find $GITHUB_WORKSPACE/ -maxdepth 1 -name "*fg2000*.dts" -o -name "*inseego*.dts" | head -n 1)
     if [ -n "$DTS_FILE_LOCAL" ]; then
-        echo "✅ 成功从本地仓库提取 DTS: $DTS_FILE_LOCAL"
         cp "$DTS_FILE_LOCAL" target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/
         DTS_FILENAME=$(basename "$DTS_FILE_LOCAL" .dts)
     else
-        echo "❌ 警告：未找到任何 DTS 文件！将使用默认占位符盲写。"
         DTS_FILENAME="ipq8072a-inseego-fg2000"
     fi
 fi
 
 echo "===> 3. 注册 FG2000 编译节点..."
-# 查漏补缺：检查是否已经被 LiBwrt 的 Patch 自动注册过，避免重复注册导致 Make 报错
 if grep -q "define Device/inseego_fg2000" target/linux/qualcommax/image/*.mk 2>/dev/null; then
     echo "✅ 节点已被内核 Patch 自动注册，跳过手动追加。"
 else
-    echo "⚠️ 未检测到预设节点，开始安全注入..."
     cat >> target/linux/qualcommax/image/ipq807x.mk <<EOF
 
 define Device/inseego_fg2000
@@ -49,40 +42,30 @@ endef
 TARGET_DEVICES += inseego_fg2000
 EOF
 fi
-
-# 销毁临时素材库
 rm -rf temp_laipeng
 
 # =========================================================
 # 系统底层信息修改
 # =========================================================
-# 修改默认IP & 固件名称
 sed -i 's/192.168.1.1/192.168.20.1/g' package/base-files/files/bin/config_generate
 sed -i "s/hostname='.*'/hostname='JacobWrt'/g" package/base-files/files/bin/config_generate
-
-# 修改编译署名和时间 (单行防断行容错版)
 BUILD_DATE=$(date +'%Y-%m-%d %H:%M:%S')
 sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.release\.description + ' / ' : '') + (luciversion || ''),#_('Firmware Version'), E('span', {}, [ (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || '') + ' / ', E('a', { href: 'https://github.com/laipeng668/openwrt-ci-roc/releases', target: '_blank', rel: 'noopener noreferrer' }, [ 'Built by Jacob ${BUILD_DATE}' ]) ]),#g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
-
-# 修改默认主题为 Aurora
 sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/Makefile
 
 # =========================================================
-# 依赖清理与环境优化 (极简瘦身)
+# 依赖清理与环境优化 (暴力破解递归依赖)
 # =========================================================
+echo "===> 正在暴力破解 Mihomo 递归依赖..."
+find feeds/ -name "Makefile" | xargs grep -l "mihomo-alpha" | xargs rm -f
+find feeds/ -name "Makefile" | xargs grep -l "mihomo-meta" | xargs rm -f
+rm -rf tmp/info/ tmp/.config-package.in
+
 # 1. 移除旧版 Golang，替换为 sbwml 优化的 Golang 1.22+
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
-# 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题
-rm -rf package/feeds/*/mihomo
-rm -rf package/feeds/*/mihomo-alpha
-rm -rf package/feeds/*/mihomo-meta
-find ./feeds ./package -maxdepth 6 -type d -name "mihomo" -exec rm -rf {} +
-find ./feeds ./package -maxdepth 6 -type d -name "mihomo-alpha" -exec rm -rf {} +
-find ./feeds ./package -maxdepth 6 -type d -name "mihomo-meta" -exec rm -rf {} +
-
-# 重新注入稳定版 mihomo 核心 (带智能路径识别)
+# 2. 重新注入稳定版 mihomo 核心
 echo "===> 正在注入 Mihomo 核心依赖..."
 git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
 if [ -d "/tmp/nikki_repo/mihomo" ]; then
@@ -92,33 +75,11 @@ else
 fi
 rm -rf /tmp/nikki_repo
 
-# 3. 彻底清理残余的上层插件及其系统软链接
-find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
-find ./ -name "netspeedtest" | xargs rm -rf
-find ./ -name "onionshare-cli" | xargs rm -rf
-find ./ -name "luci-app-passwall*" | xargs rm -rf
-find ./ -name "passwall-packages" | xargs rm -rf
-find ./ -name "luci-app-lxc" | xargs rm -rf
-find ./ -name "rpcd-mod-lxc" | xargs rm -rf
-find ./ -name "lxc" -type d | xargs rm -rf
-find ./ -name "geoview" | xargs rm -rf
-find ./ -name "luci-app-wechatpush" | xargs rm -rf
+# 3. 彻底清理残余插件及链接
+find ./ -name "luci-app-*" -o -name "mihomo*" -o -name "passwall*" -o -name "luci-app-lxc" | xargs rm -rf
+rm -rf feeds/luci/applications/luci-app-argon-config feeds/luci/applications/luci-app-appfilter feeds/luci/applications/luci-app-frp* feeds/luci/themes/luci-theme-argon
 
-# 4. 移除源自带的旧版本包，准备替换
-rm -rf feeds/luci/applications/luci-app-argon-config
-rm -rf feeds/luci/applications/luci-app-appfilter
-rm -rf feeds/luci/applications/luci-app-frpc
-rm -rf feeds/luci/applications/luci-app-frps
-rm -rf feeds/luci/themes/luci-theme-argon
-rm -rf feeds/packages/net/open-app-filter
-rm -rf feeds/packages/net/ariang
-rm -rf feeds/packages/net/aria2
-rm -rf feeds/packages/net/nginx
-rm -rf feeds/packages/net/frp
-
-# =========================================================
-# 拯救 Nikki：从官方稳定分支提取健康的 yq 源码
-# =========================================================
+# 4. 拯救 Nikki：提取 yq 源码
 rm -rf feeds/packages/utils/yq
 git clone --depth=1 -b openwrt-23.05 https://github.com/openwrt/packages.git /tmp/stable_packages
 cp -r /tmp/stable_packages/utils/yq feeds/packages/utils/yq
@@ -127,7 +88,6 @@ rm -rf /tmp/stable_packages
 # =========================================================
 # 引入第三方插件与工具
 # =========================================================
-# Git稀疏克隆函数
 function git_sparse_clone() {
   branch="$1" repourl="$2" && shift 2
   git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
@@ -137,7 +97,6 @@ function git_sparse_clone() {
   cd .. && rm -rf $repodir
 }
 
-# 基础下载与穿透工具
 git_sparse_clone aria2 https://github.com/laipeng668/packages net/aria2
 mv -f package/aria2 feeds/packages/net/aria2
 git_sparse_clone nginx https://github.com/laipeng668/packages net/nginx
@@ -150,7 +109,6 @@ git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-fr
 mv -f package/luci-app-frpc feeds/luci/applications/luci-app-frpc
 mv -f package/luci-app-frps feeds/luci/applications/luci-app-frps
 
-# UI与功能拓展
 git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon
 git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config feeds/luci/applications/luci-app-argon-config
 git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
