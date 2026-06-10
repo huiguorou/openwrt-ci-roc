@@ -1,6 +1,23 @@
 #!/bin/bash
 
 # =========================================================
+# 硬件核心：Inseego FG2000 适配与 NSS 补丁注入
+# =========================================================
+echo "===> 1. 拉取并应用高通 6.x NSS 核心优化补丁..."
+git clone --depth 1 https://github.com/laipeng668/openwrt-6.x.git temp_laipeng
+cp -r temp_laipeng/target/linux/ipq807x/patches-6.* target/linux/ipq807x/
+rm -rf temp_laipeng
+
+echo "===> 2. 注入 Inseego FG2000 设备树 (DTS)..."
+# 确保在云端 Actions 的工作空间中能找到你上传的 dts 文件
+mkdir -p target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
+cp $GITHUB_WORKSPACE/ipq8072a-inseego-fg2000.dts target/linux/ipq807x/files/arch/arm64/boot/dts/qcom/
+
+echo "===> 3. 注册 FG2000 编译节点..."
+sed -i '/define Device\/qcom_ipq807x_generic/i\define Device/inseego_fg2000\n  DEVICE_VENDOR := Inseego\n  DEVICE_MODEL := FG2000\n  DEVICE_PACKAGES := kmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-drv-pppoe kmod-qca-nss-ecm\nendef\nTARGET_DEVICES += inseego_fg2000\n' target/linux/ipq807x/image/generic.mk
+
+
+# =========================================================
 # 系统底层信息修改
 # =========================================================
 # 修改默认IP & 固件名称
@@ -24,15 +41,15 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
 # 修改默认主题为 Aurora
 sed -i 's/luci-theme-bootstrap/luci-theme-aurora/g' feeds/luci/collections/luci/Makefile
 
+
 # =========================================================
 # 依赖清理与环境优化 (极简瘦身)
 # =========================================================
-# 1. 移除旧版 Golang，替换为 sbwml 优化的 Golang 1.22+ (彻底解决 Mihomo 编译失败 cp 报错)
+# 1. 移除旧版 Golang，替换为 sbwml 优化的 Golang 1.22+
 rm -rf feeds/packages/lang/golang
 git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
 
-# 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题 (核心修复)
-# 彻底铲除所有带有递归 BUG 的 mihomo 源文件与软链接 (无视路径，全部剿灭)
+# 2. 彻底解决 Mihomo 死循环与 Nikki 依赖丢失问题
 rm -rf package/feeds/*/mihomo
 rm -rf package/feeds/*/mihomo-alpha
 rm -rf package/feeds/*/mihomo-meta
@@ -40,15 +57,14 @@ find ./feeds ./package -maxdepth 6 -type d -name "mihomo" -exec rm -rf {} +
 find ./feeds ./package -maxdepth 6 -type d -name "mihomo-alpha" -exec rm -rf {} +
 find ./feeds ./package -maxdepth 6 -type d -name "mihomo-meta" -exec rm -rf {} +
 
-# 清理完成后，强行注入 Nikki 作者官方的稳定版 mihomo 核心到 package 目录 (优先级最高)
+# 注入 Nikki 官方稳定版 mihomo 核心
 git clone --depth=1 https://github.com/morytyann/OpenWrt-mihomo.git /tmp/nikki_repo
 cp -r /tmp/nikki_repo/mihomo package/mihomo
 rm -rf /tmp/nikki_repo
 
-# 3. 彻底清理残余的上层插件及其系统软链接 (无死角清理)
+# 3. 彻底清理残余的上层插件及其系统软链接
 find ./ -name "luci-app-netspeedtest*" | xargs rm -rf
 find ./ -name "netspeedtest" | xargs rm -rf
-# find ./ -name "QModem" | xargs rm -rf
 find ./ -name "onionshare-cli" | xargs rm -rf
 find ./ -name "luci-app-passwall*" | xargs rm -rf
 find ./ -name "passwall-packages" | xargs rm -rf
@@ -58,7 +74,7 @@ find ./ -name "lxc" -type d | xargs rm -rf
 find ./ -name "geoview" | xargs rm -rf
 find ./ -name "luci-app-wechatpush" | xargs rm -rf
 
-# 4. 移除源自带的旧版本包，准备通过 Git 克隆替换新版
+# 4. 移除源自带的旧版本包，准备替换
 rm -rf feeds/luci/applications/luci-app-argon-config
 rm -rf feeds/luci/applications/luci-app-appfilter
 rm -rf feeds/luci/applications/luci-app-frpc
@@ -70,19 +86,15 @@ rm -rf feeds/packages/net/aria2
 rm -rf feeds/packages/net/nginx
 rm -rf feeds/packages/net/frp
 
+
 # =========================================================
-# 拯救 Nikki：从官方稳定分支提取健康的 yq 源码 (绕过高版本 Go 编译报错)
+# 拯救 Nikki：从官方稳定分支提取健康的 yq 源码
 # =========================================================
 rm -rf feeds/packages/utils/yq
-
-# 拉取官方 23.05 稳定版 packages 仓库到临时目录
 git clone --depth=1 -b openwrt-23.05 https://github.com/openwrt/packages.git /tmp/stable_packages
-
-# 将稳定版的 yq 源码完整复制过来替换
 cp -r /tmp/stable_packages/utils/yq feeds/packages/utils/yq
-
-# 清理临时文件，释放空间
 rm -rf /tmp/stable_packages
+
 
 # =========================================================
 # 引入第三方插件与工具
@@ -97,7 +109,7 @@ function git_sparse_clone() {
   cd .. && rm -rf $repodir
 }
 
-# 基础下载与穿透工具 (Aria2, Nginx, FRP)
+# 基础下载与穿透工具
 git_sparse_clone aria2 https://github.com/laipeng668/packages net/aria2
 mv -f package/aria2 feeds/packages/net/aria2
 git_sparse_clone nginx https://github.com/laipeng668/packages net/nginx
@@ -110,7 +122,7 @@ git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-fr
 mv -f package/luci-app-frpc feeds/luci/applications/luci-app-frpc
 mv -f package/luci-app-frps feeds/luci/applications/luci-app-frps
 
-# UI与功能拓展 (Argon, Aurora, Lucky, OAF, AC控制器等)
+# UI与功能拓展
 git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon
 git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config feeds/luci/applications/luci-app-argon-config
 git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
@@ -119,5 +131,3 @@ git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
 git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
 git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
 git clone --depth=1 https://github.com/laipeng668/luci-app-gecoosac package/luci-app-gecoosac
-# git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
-# chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
