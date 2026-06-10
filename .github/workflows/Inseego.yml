@@ -12,8 +12,8 @@ env:
   CONFIG_FILE: configs/inseego.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Jacob-script.sh
-  CLASH_KERNEL: amd64
-  FIRMWARE_TAG: IPQ807X
+  CLASH_KERNEL: arm64           # <--- 必须修改为 arm64 (高通架构)
+  FIRMWARE_TAG: QUALCOMMAX      # <--- 将固件标签对齐新框架
   TZ: Asia/Shanghai
 
 jobs:
