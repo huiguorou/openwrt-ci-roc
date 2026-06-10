@@ -1,3 +1,5 @@
+name: Inseego
+
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-25.12  # 明确锁定 25.12 分支
