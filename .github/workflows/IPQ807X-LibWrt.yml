@@ -1,4 +1,4 @@
-name: IPQ807X-LibWrt
+name: IPQ807X-LibWrt (Pure Wired NSS)
 
 on:
   workflow_dispatch:
@@ -11,8 +11,8 @@ env:
   REPO_BRANCH: main-nss
   CONFIG_FILE: configs/IPQ807X.config
   GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
-  CLASH_KERNEL: amd64
+  DIY_SCRIPT: scripts/Jacob-script.sh  # 👑 修正：统一对齐为 Jacob-script.sh
+  CLASH_KERNEL: arm64
   FIRMWARE_TAG: IPQ807X
   TZ: Asia/Shanghai
 
@@ -55,6 +55,7 @@ jobs:
         sudo mkswap /swapfile
         sudo swapon /swapfile
         free -h
+
     - name: Checkout(检出代码)
       uses: actions/checkout@main
 
@@ -68,12 +69,13 @@ jobs:
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
+        # 兼容性适配提取 6.12 内核版本号
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 | head -n 1)
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
     - name: Generate Variables(生成变量)
       run: |
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
+        cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
         SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
@@ -105,22 +107,21 @@ jobs:
     - name: Install Feeds(安装feeds)
       run: |
         cd $OPENWRT_PATH
-        # 修复错误2：必须在 update 之前追加 Nikki 官方源码
         echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a
   
     - name: Load Custom Configuration(加载自定义配置)
       run: |
-        chmod +x $DIY_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
 
     - name: Download DL Package(下载DL软件包)
       run: |
-        cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
+        cat $GITHUB_WORKSPACE/$CONFIG_FILE $GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
         
-        # 修复错误3：🧹 彻底清理旧配置中的其他代理插件及易错残余依赖 (斩草除根)
+        # 🧹 彻底清理旧配置中的其他代理插件及易错残余依赖
         sed -i '/passwall/d' $OPENWRT_PATH/.config
         sed -i '/openclash/d' $OPENWRT_PATH/.config
         sed -i '/xray/d' $OPENWRT_PATH/.config
@@ -131,12 +132,20 @@ jobs:
         sed -i '/CONFIG_PACKAGE_ruby=y/d' $OPENWRT_PATH/.config
         sed -i '/CONFIG_PACKAGE_ruby-yaml=y/d' $OPENWRT_PATH/.config
         
-        # 修复错误4：🚀 强制注入基础依赖与内核模块
+        # 🚀 强制注入基础网络依赖与透明代理支撑
         echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_libncurses=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-dummy=y" >> $OPENWRT_PATH/.config
         
-        # 🚀 强制注入 5G 路由器必备驱动与管理
+        # 🚀 满血激活高通 NSS 硬件加速核心模块 (针对有线骨干转发深度优化)
+        echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> $OPENWRT_PATH/.config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> $OPENWRT_PATH/.config
+        
+        # 🚀 保持 5G 路由器必备模块兼容
         echo "CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_kmod-mhi-net=y" >> $OPENWRT_PATH/.config
@@ -146,8 +155,7 @@ jobs:
         echo "CONFIG_PACKAGE_luci-proto-modemmanager=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_usbutils=y" >> $OPENWRT_PATH/.config
         
-        # 🚀 强制注入 Nikki 及其核心依赖
-        echo "CONFIG_PACKAGE_kmod-dummy=y" >> $OPENWRT_PATH/.config
+        # 🚀 注入 Nikki 上层核心
         echo "CONFIG_PACKAGE_nikki=y" >> $OPENWRT_PATH/.config
         echo "CONFIG_PACKAGE_luci-app-nikki=y" >> $OPENWRT_PATH/.config
         
@@ -175,8 +183,12 @@ jobs:
         cd $OPENWRT_PATH/bin/targets/*/*
         cp $OPENWRT_PATH/.config IPQ807X.config
         mv config.buildinfo IPQ807X.config.buildinfo
-        mv libwrt-qualcommax-ipq807x.manifest IPQ807X.manifest
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages
+        # 稳健适配：防止清单文件名细微不同导致中断
+        mv *.manifest IPQ807X.manifest || true
+        
+        # 🛠️ 稳健修复：使用安全查找移动所有 apk 软件包，绝不空手而归
+        mkdir -p packages
+        find $OPENWRT_PATH/bin/packages/ -type f -name "*.apk" -exec cp {} packages/ \; 2>/dev/null || true
         tar -zcf IPQ807X.Packages.tar.gz packages
         rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
@@ -185,17 +197,17 @@ jobs:
       if: steps.compile.outputs.status == 'success'
       uses: ncipollo/release-action@main
       with:
-        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        name: ${{ env.DATE }} for Inseego FG2000
         allowUpdates: true
         tag: ${{ env.FIRMWARE_TAG }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is Custom OpenWrt Firmware for ${{ env.FIRMWARE_TAG }}**
+          **This is Custom OpenWrt Firmware for Inseego FG2000**
           ### 📒 固件信息
-          - 专属深度精简定制版：基于 6.12 内核，完美支持 PCIe/USB 5G 模组及 ModemManager 管理。
-          - 核心插件：内置专属 Nikki 代理客户端，已剔除冗余冲突依赖，系统更轻快。
-          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的专属路由网关固件
+          - **核心网关硬优化**：满血开启高通 NSS 硬件加速（ECM/Data Plane），专为超高带宽 NAT 转发打造。
+          - 5G 模组支持：内置 PCIe/USB 5G 模组驱动及 ModemManager 完整网络堆栈。
+          - 代理核心：内置专属解耦版 Nikki 客户端。
           - 🌐 默认地址: **192.168.20.1**
           - 🔑 默认密码: none
           ### 🧊 固件版本
@@ -205,11 +217,9 @@ jobs:
 
     - name: Delete Old Cache(删除旧缓存)
       run: |
-        # 获取缓存列表并删除
         gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
           gh cache delete "$key"
         done
-        # 输出缓存状态
         echo "========cache status========"
         echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
         echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
