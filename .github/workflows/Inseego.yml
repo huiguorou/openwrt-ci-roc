@@ -1,4 +1,4 @@
-name: Inseego FG2000 (Pure Wired NSS)
+name: IPQ807X-LibWrt (Pure Wired NSS)
 
 on:
   workflow_dispatch:
@@ -7,214 +7,681 @@ on:
   #   - cron: "0 18 * * *"
 
 env:
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: openwrt-25.12
-  CONFIG_FILE: configs/inseego.config
+  REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
+  REPO_BRANCH: main-nss
+
+  CONFIG_FILE: configs/IPQ807X.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Jacob-script.sh
-  CLASH_KERNEL: arm64           # <--- 必须修改为 arm64 (高通架构)
-  FIRMWARE_TAG: QUALCOMMAX      # <--- 将固件标签对齐新框架
+
+  FIRMWARE_TAG: IPQ807X
   TZ: Asia/Shanghai
 
 jobs:
   Build:
     runs-on: ubuntu-24.04
 
-    steps:
-    - name: Check Server Performance(检查服务器性能)
-      run: |
-        echo "警告⚠"
-        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
-        echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
-        echo "--------------------------CPU信息--------------------------"
-        echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-        echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
-        echo "--------------------------内存信息--------------------------"
-        echo "已安装内存详细信息："
-        echo -e "$(sudo lshw -short -C memory | grep GiB) \n"
-        echo "--------------------------硬盘信息--------------------------"
-        echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+    permissions:
+      contents: write
 
-    - name: Initialization Environment(初始化环境)
+    steps:
+
+    # =====================================================
+    # 1. Runner 信息
+    # =====================================================
+
+    - name: Check Server Performance
+      run: |
+        echo "================ CPU ================"
+        nproc
+        lscpu || true
+
+        echo
+        echo "=============== Memory =============="
+        free -h
+
+        echo
+        echo "=============== Disk ================="
+        df -hT
+
+
+    # =====================================================
+    # 2. 初始化 Ubuntu
+    # =====================================================
+
+    - name: Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo -E apt-get -y update
-        sudo -E apt-get -y install upx-ucl build-essential
-        sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
-        sudo -E systemctl daemon-reload
+        set -Eeuo pipefail
+
+        sudo -E apt-get update
+
+        sudo -E apt-get install -y \
+          build-essential \
+          clang \
+          flex \
+          bison \
+          g++ \
+          gawk \
+          gcc-multilib \
+          gettext \
+          git \
+          libncurses-dev \
+          libssl-dev \
+          python3 \
+          rsync \
+          unzip \
+          zlib1g-dev \
+          file \
+          wget \
+          curl \
+          jq \
+          ccache \
+          upx-ucl
+
+        curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends \
+          -o /tmp/openwrt-depends
+
+        sudo -E apt-get install -y $(cat /tmp/openwrt-depends)
+
         sudo timedatectl set-timezone "$TZ"
-        
-        # --- 🚀 修复占用报错：先卸载旧 Swap，再重新分配 8GB ---
-        sudo swapoff /swapfile || true
-        sudo rm -f /swapfile || true
-        
-        # 创建新的 8GB 虚拟内存
+
+        # 8GB Swap
+        sudo swapoff /swapfile 2>/dev/null || true
+        sudo rm -f /swapfile
+
         sudo fallocate -l 8G /swapfile
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
+
         free -h
 
-    - name: Checkout(检出代码)
-      uses: actions/checkout@main
 
-    - name: Clone Source Code(克隆源代码)
+    # =====================================================
+    # 3. Checkout CI Repository
+    # =====================================================
+
+    - name: Checkout CI Repository
+      uses: actions/checkout@v4
+
+
+    # =====================================================
+    # 4. 拉取 main-nss 最新源码
+    #
+    # 每次 workflow 都拉取最新 upstream commit。
+    # =====================================================
+
+    - name: Clone Latest Upstream Source
       run: |
-        df -hT $GITHUB_WORKSPACE
+        set -Eeuo pipefail
+
+        sudo rm -rf /mnt/openwrt
         sudo mkdir -p /mnt/openwrt
-        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
-        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
+        sudo chown -R "$(id -u):$(id -g)" /mnt/openwrt
+
+        echo "===> Clone latest upstream"
+        echo "Repo   : $REPO_URL"
+        echo "Branch : $REPO_BRANCH"
+
+        git clone \
+          --depth 1 \
+          --branch "$REPO_BRANCH" \
+          --single-branch \
+          "$REPO_URL" \
+          /mnt/openwrt
+
         cd /mnt/openwrt
-        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
-        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
-        # 适配 ImmortalWrt 可能的内核版本号输出 (6.x)
-        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.* | head -n 1)
-        echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
 
-    - name: Generate Variables(生成变量)
-      run: |
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
-        make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
-        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        CURRENT_BRANCH="$(git branch --show-current)"
+        CURRENT_HASH="$(git rev-parse HEAD)"
 
-    - name: Cache Toolchain(缓存工具链)
-      uses: actions/cache@main
-      with:
-        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
-        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
-        path: |
-          ${{ env.OPENWRT_PATH }}/.ccache
-          ${{ env.OPENWRT_PATH }}/staging_dir
-
-    - name: Refresh The Cache(刷新缓存)
-      run: |
-        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-              find "$dir" -type f -exec touch {} +
-          done
+        if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
+          echo "ERROR: Expected branch $REPO_BRANCH but got $CURRENT_BRANCH"
+          exit 1
         fi
 
-    - name: Install Feeds(安装feeds)
+        echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
+        echo "SOURCE_HASH=$CURRENT_HASH" >> "$GITHUB_ENV"
+
+        SOURCE_REPO="$(basename "$REPO_URL" .git)"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
+
+        VERSION_INFO="$(git show -s \
+          --date=short \
+          --format='作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H')"
+
+        echo "VERSION_INFO=$VERSION_INFO" >> "$GITHUB_ENV"
+
+        echo
+        echo "============ Upstream ============"
+        git log -1 --oneline
+        echo "=================================="
+
+
+    # =====================================================
+    # 5. Feed 配置
+    # =====================================================
+
+    - name: Configure Feeds
       run: |
-        cd $OPENWRT_PATH
-        echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
+        if ! grep -q '^src-git nikki ' feeds.conf.default; then
+          echo \
+            'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' \
+            >> feeds.conf.default
+        fi
+
+        echo "===== feeds.conf.default ====="
+        cat feeds.conf.default
+
+
+    # =====================================================
+    # 6. 应用 Jacob 自定义
+    #
+    # 不修改 kernel NSS patch queue。
+    # =====================================================
+
+    - name: Apply Jacob Customization
+      run: |
+        set -Eeuo pipefail
+
+        chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+
+        cd "$OPENWRT_PATH"
+
+        "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+
+
+    # =====================================================
+    # 7. 更新并安装 feeds
+    # =====================================================
+
+    - name: Update And Install Feeds
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
         ./scripts/feeds update -a
         ./scripts/feeds install -a
- 
-    - name: Load Custom Configuration(加载自定义配置)
-      run: |
-        chmod +x $DIY_SCRIPT
-        cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/$DIY_SCRIPT
 
-    - name: Download DL Package(下载DL软件包)
+
+    # =====================================================
+    # 8. 生成最终配置
+    # =====================================================
+
+    - name: Generate Build Configuration
       run: |
-        cat $CONFIG_FILE $GENERAL_CONFIG_FILE > $OPENWRT_PATH/.config
-        
-        # 🧹 清理旧配置中的其他代理插件
-        sed -i '/passwall/d' $OPENWRT_PATH/.config
-        sed -i '/openclash/d' $OPENWRT_PATH/.config
-        sed -i '/xray/d' $OPENWRT_PATH/.config
-        sed -i '/v2ray/d' $OPENWRT_PATH/.config
-        sed -i '/sing-box/d' $OPENWRT_PATH/.config
-        sed -i '/shadowsocks/d' $OPENWRT_PATH/.config
-        sed -i '/yq/d' $OPENWRT_PATH/.config
-        
-        # 🔪 物理超度：强制剔除所有 5G 与 Wi-Fi 驱动，释放内核压力
-        sed -i '/kmod-ath/d' $OPENWRT_PATH/.config
-        sed -i '/kmod-mac80211/d' $OPENWRT_PATH/.config
-        sed -i '/hostapd/d' $OPENWRT_PATH/.config
-        sed -i '/wpad/d' $OPENWRT_PATH/.config
-        sed -i '/modemmanager/d' $OPENWRT_PATH/.config
-        sed -i '/uqmi/d' $OPENWRT_PATH/.config
-        sed -i '/kmod-usb-net-qmi-wwan/d' $OPENWRT_PATH/.config
-        sed -i '/kmod-usb-net-cdc-mbim/d' $OPENWRT_PATH/.config
-        sed -i '/kmod-mhi/d' $OPENWRT_PATH/.config
-        
-        # 🚀 强制注入基础依赖与 NSS 加速核心模块
-        echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-tun=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_libncurses=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-qca-nss-dp=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-qca-nss-drv=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-qca-nss-ecm=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> $OPENWRT_PATH/.config
-        
-        # 🚀 注入 Nikki 及其核心依赖 (保留你原有的代理配置)
-        echo "CONFIG_PACKAGE_kmod-dummy=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_nikki=y" >> $OPENWRT_PATH/.config
-        echo "CONFIG_PACKAGE_luci-app-nikki=y" >> $OPENWRT_PATH/.config
-        
-        cd $OPENWRT_PATH
+        set -Eeuo pipefail
+
+        cd "$OPENWRT_PATH"
+
+        cat \
+          "$GITHUB_WORKSPACE/$CONFIG_FILE" \
+          "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE" \
+          > .config
+
+
+        # -----------------------------------------------
+        # 清理互斥代理组件
+        # -----------------------------------------------
+
+        sed -i \
+          -e '/CONFIG_PACKAGE_.*passwall/d' \
+          -e '/CONFIG_PACKAGE_.*openclash/d' \
+          -e '/CONFIG_PACKAGE_.*xray/d' \
+          -e '/CONFIG_PACKAGE_.*v2ray/d' \
+          -e '/CONFIG_PACKAGE_.*sing-box/d' \
+          -e '/CONFIG_PACKAGE_.*shadowsocks/d' \
+          -e '/CONFIG_PACKAGE_yq/d' \
+          -e '/CONFIG_PACKAGE_ruby=y/d' \
+          -e '/CONFIG_PACKAGE_ruby-yaml=y/d' \
+          .config || true
+
+
+        # -----------------------------------------------
+        # Helper
+        # -----------------------------------------------
+
+        set_config_y() {
+          local symbol="$1"
+
+          sed -i \
+            -e "/^${symbol}=.*/d" \
+            -e "/^# ${symbol} is not set/d" \
+            .config
+
+          echo "${symbol}=y" >> .config
+        }
+
+
+        # -----------------------------------------------
+        # FG2000
+        # -----------------------------------------------
+
+        set_config_y \
+          CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000
+
+
+        # -----------------------------------------------
+        # Nikki 强制依赖
+        #
+        # kmod-dummy 必须存在。
+        # -----------------------------------------------
+
+        set_config_y CONFIG_PACKAGE_kmod-inet-diag
+        set_config_y CONFIG_PACKAGE_kmod-tun
+        set_config_y CONFIG_PACKAGE_kmod-dummy
+        set_config_y CONFIG_PACKAGE_libncurses
+
+
+        # -----------------------------------------------
+        # NSS 核心
+        # -----------------------------------------------
+
+        set_config_y CONFIG_PACKAGE_kmod-qca-nss-dp
+        set_config_y CONFIG_PACKAGE_kmod-qca-nss-drv
+        set_config_y CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
+        set_config_y CONFIG_PACKAGE_kmod-qca-nss-ecm
+
+
+        # shortcut-fe 为可选组件
+        if grep -Rqs \
+          'KernelPackage/shortcut-fe\|Package/kmod-shortcut-fe' \
+          package feeds 2>/dev/null; then
+
+          set_config_y CONFIG_PACKAGE_kmod-shortcut-fe
+
+        else
+
+          echo "INFO: kmod-shortcut-fe not present upstream; skip."
+
+        fi
+
+
+        # -----------------------------------------------
+        # 5G modem
+        # -----------------------------------------------
+
+        set_config_y CONFIG_PACKAGE_kmod-usb-net-qmi-wwan
+        set_config_y CONFIG_PACKAGE_kmod-usb-net-cdc-mbim
+        set_config_y CONFIG_PACKAGE_kmod-mhi-net
+        set_config_y CONFIG_PACKAGE_kmod-mhi-pci-generic
+        set_config_y CONFIG_PACKAGE_modemmanager
+        set_config_y CONFIG_PACKAGE_luci-proto-modemmanager
+        set_config_y CONFIG_PACKAGE_usbutils
+
+
+        if find package feeds \
+          -type d \
+          -name 'luci-app-modemband' \
+          -print -quit \
+          | grep -q .; then
+
+          set_config_y CONFIG_PACKAGE_luci-app-modemband
+
+        fi
+
+
+        # -----------------------------------------------
+        # Nikki
+        # -----------------------------------------------
+
+        set_config_y CONFIG_PACKAGE_nikki
+        set_config_y CONFIG_PACKAGE_luci-app-nikki
+
+
+        # -----------------------------------------------
+        # 解析 Kconfig
+        # -----------------------------------------------
+
         make defconfig
-        make download -j$(nproc)
 
-    - name: Compile Firmware(开始编译固件)
+        echo
+        echo "========== Target =========="
+
+        grep '^CONFIG_TARGET_BOARD=' .config || true
+        grep '^CONFIG_TARGET_SUBTARGET=' .config || true
+        grep \
+          'CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000=y' \
+          .config || true
+
+
+    # =====================================================
+    # 9. 检查关键依赖
+    #
+    # kmod-dummy / kmod-tun / Nikki / NSS 均为强制。
+    # =====================================================
+
+    - name: Validate Critical Configuration
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
+        require_config() {
+          local symbol="$1"
+
+          if ! grep -q "^${symbol}=y$" .config; then
+
+            echo
+            echo "=============================================="
+            echo "ERROR: Required configuration is unavailable:"
+            echo
+            echo "  $symbol"
+            echo
+            echo "Upstream may have renamed or removed it."
+            echo "=============================================="
+
+            exit 1
+          fi
+        }
+
+
+        require_config \
+          CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000
+
+        require_config \
+          CONFIG_PACKAGE_kmod-qca-nss-dp
+
+        require_config \
+          CONFIG_PACKAGE_kmod-qca-nss-drv
+
+        require_config \
+          CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
+
+        require_config \
+          CONFIG_PACKAGE_kmod-qca-nss-ecm
+
+        require_config \
+          CONFIG_PACKAGE_kmod-dummy
+
+        require_config \
+          CONFIG_PACKAGE_kmod-tun
+
+        require_config \
+          CONFIG_PACKAGE_nikki
+
+        require_config \
+          CONFIG_PACKAGE_luci-app-nikki
+
+
+        DEVICE_TARGET="$(
+          sed -n \
+            's/^CONFIG_TARGET_BOARD="\([^"]*\)"/\1/p' \
+            .config
+        )"
+
+        DEVICE_SUBTARGET="$(
+          sed -n \
+            's/^CONFIG_TARGET_SUBTARGET="\([^"]*\)"/\1/p' \
+            .config
+        )"
+
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_ENV"
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_ENV"
+
+        echo
+        echo "Target    : $DEVICE_TARGET"
+        echo "Subtarget : $DEVICE_SUBTARGET"
+
+        echo
+        echo "Critical Nikki/NSS dependencies:"
+        grep \
+          -E \
+          'CONFIG_PACKAGE_(kmod-dummy|kmod-tun|nikki|luci-app-nikki|kmod-qca-nss)' \
+          .config \
+          || true
+
+
+    # =====================================================
+    # 10. 检测 Kernel Version
+    # =====================================================
+
+    - name: Detect Kernel Version
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
+        VERSION_KERNEL=""
+
+        if [ -f target/linux/generic/kernel-6.12 ]; then
+
+          VERSION_KERNEL="$(
+            grep -oE \
+              '[0-9]+\.[0-9]+\.[0-9]+' \
+              target/linux/generic/kernel-6.12 \
+              | head -n1 \
+              || true
+          )"
+
+        fi
+
+        if [ -z "$VERSION_KERNEL" ]; then
+          VERSION_KERNEL="6.12.x"
+        fi
+
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> "$GITHUB_ENV"
+        echo "Kernel: $VERSION_KERNEL"
+
+
+    # =====================================================
+    # 11. Cache
+    #
+    # 不缓存 staging_dir。
+    # 避免上游更新之后 ABI/toolchain/header 污染。
+    # =====================================================
+
+    - name: Cache Downloads And Ccache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.OPENWRT_PATH }}/dl
+          ${{ env.OPENWRT_PATH }}/.ccache
+
+        key: libwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.SOURCE_HASH }}
+
+        restore-keys: |
+          libwrt-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+          libwrt-${{ env.REPO_BRANCH }}-
+
+
+    # =====================================================
+    # 12. 下载源码
+    # =====================================================
+
+    - name: Download Packages
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
+        make download -j"$(nproc)"
+
+        # 删除异常下载文件
+        find dl \
+          -type f \
+          -size -1024c \
+          -print \
+          -delete || true
+
+
+    # =====================================================
+    # 13. Kernel patch preflight
+    #
+    # 如果上游 patch queue 真有问题，在这里提前失败。
+    # =====================================================
+
+    - name: Kernel Patch Preflight
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+
+        echo
+        echo "==============================================="
+        echo "Checking upstream kernel patch queue..."
+        echo "==============================================="
+
+        make target/linux/clean
+
+        make target/linux/prepare -j1 V=s
+
+        echo
+        echo "Kernel patch queue successfully prepared."
+
+
+    # =====================================================
+    # 14. 编译
+    # =====================================================
+
+    - name: Compile Firmware
       id: compile
       run: |
-        cd $OPENWRT_PATH
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
 
-    - name: Check Space Usage(检查空间使用情况)
-      if: (!cancelled())
-      run: df -hT
+        echo
+        echo "========================================"
+        echo "$(nproc) thread compile"
+        echo "========================================"
 
-    - name: Organize Files(整理文件)
+        if ! make -j"$(nproc)"; then
+
+          echo
+          echo "Parallel build failed."
+          echo "Retrying verbose single-thread build..."
+          echo
+
+          make -j1 V=s
+
+        fi
+
+        echo "status=success" >> "$GITHUB_OUTPUT"
+
+        echo \
+          "DATE=$(date +'%Y-%m-%d %H:%M:%S')" \
+          >> "$GITHUB_ENV"
+
+        echo \
+          "FILE_DATE=$(date +'%Y.%m.%d')" \
+          >> "$GITHUB_ENV"
+
+
+    # =====================================================
+    # 15. 磁盘空间
+    # =====================================================
+
+    - name: Check Space Usage
+      if: always()
+      run: |
+        df -hT
+
+
+    # =====================================================
+    # 16. 整理固件
+    # =====================================================
+
+    - name: Organize Files
       if: steps.compile.outputs.status == 'success'
       run: |
-        cd $OPENWRT_PATH/bin/targets/*/*
-        cp $OPENWRT_PATH/.config IPQ807X.config
-        mv config.buildinfo IPQ807X.config.buildinfo
-        mv immortalwrt-*.manifest IPQ807X.manifest || true
-        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages || mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages
-        tar -zcf IPQ807X.Packages.tar.gz packages
-        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
-        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        set -Eeuo pipefail
 
-    - name: Upload Firmware To Release(发布固件)
+        TARGET_DIR="$(
+          find "$OPENWRT_PATH/bin/targets" \
+            -mindepth 2 \
+            -maxdepth 2 \
+            -type d \
+            | head -n1
+        )"
+
+        if [ -z "$TARGET_DIR" ]; then
+
+          echo "ERROR: target output directory not found."
+          exit 1
+
+        fi
+
+        cd "$TARGET_DIR"
+
+        cp \
+          "$OPENWRT_PATH/.config" \
+          IPQ807X.config
+
+        if [ -f config.buildinfo ]; then
+          mv \
+            config.buildinfo \
+            IPQ807X.config.buildinfo
+        fi
+
+        MANIFEST="$(
+          find . \
+            -maxdepth 1 \
+            -type f \
+            -name '*.manifest' \
+            | head -n1
+        )"
+
+        if [ -n "$MANIFEST" ]; then
+          cp "$MANIFEST" IPQ807X.manifest
+        fi
+
+
+        mkdir -p packages
+
+        find "$OPENWRT_PATH/bin/packages/" \
+          -type f \
+          \( -name '*.apk' -o -name '*.ipk' \) \
+          -exec cp {} packages/ \; \
+          2>/dev/null || true
+
+        tar -zcf \
+          IPQ807X.Packages.tar.gz \
+          packages
+
+        rm -rf packages
+
+        rm -f \
+          feeds.buildinfo \
+          version.buildinfo \
+          sha256sums \
+          profiles.json \
+          2>/dev/null || true
+
+        echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
+
+
+    # =====================================================
+    # 17. 发布 Release
+    # =====================================================
+
+    - name: Upload Firmware To Release
       if: steps.compile.outputs.status == 'success'
-      uses: ncipollo/release-action@main
+      uses: ncipollo/release-action@v1
       with:
         name: ${{ env.DATE }} for Inseego FG2000
         allowUpdates: true
+        replacesArtifacts: true
         tag: ${{ env.FIRMWARE_TAG }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **This is Custom ImmortalWrt 25.12 Firmware for Inseego FG2000**
-          ### 📒 固件信息
-          - **极致精简纯有线版**：已彻底剔除 Wi-Fi、5G 基带驱动及 ModemManager。
-          - **核心网关优化**：满血激活高通 NSS 硬件加速（ECM/Data Plane），专为高速宽带 NAT 转发打造。
-          - 核心插件：内置专属 Nikki 代理客户端。
-          - 🌐 默认地址: **192.168.1.1** (取决于你脚本里的定义)
-          - 🔑 默认密码: none
-          ### 🧊 固件版本
-          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
-          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
-          - ${{ env.VERSION_INFO }}
+          **Custom OpenWrt Firmware for Inseego FG2000**
 
-    - name: Delete Old Cache(删除旧缓存)
-      run: |
-        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
-          gh cache delete "$key"
-        done
-        echo "========cache status========"
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ### 固件信息
+
+          - Target: Qualcomm IPQ807x
+          - Device: Inseego FG2000
+          - NSS: Enabled
+          - Proxy: Nikki
+          - Nikki dummy interface: Enabled
+          - Default IP: 192.168.20.1
+          - Default password: none
+
+          ### Build
+
+          - Kernel: ${{ env.VERSION_KERNEL }}
+          - Source branch: ${{ env.REPO_BRANCH }}
+          - Source commit: ${{ env.SOURCE_HASH }}
+
+          ${{ env.VERSION_INFO }}
