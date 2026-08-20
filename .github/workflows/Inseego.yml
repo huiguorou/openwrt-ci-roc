@@ -1,4 +1,4 @@
-name: IPQ807X-LibWrt (Pure Wired NSS)
+name: IPQ807X-LibWrt
 
 on:
   workflow_dispatch:
