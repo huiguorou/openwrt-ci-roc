@@ -13,17 +13,21 @@ DTS_DIR="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom"
 
 IMAGE_FILE="target/linux/qualcommax/image/ipq807x.mk"
 
-DEVICE_NAME="inseego_fg2000"
-DEVICE_DTS="ipq8072-fg2000"
+FG2000_DEVICE="inseego_fg2000"
+FG2000_DTS="ipq8072-fg2000"
+
+AP8220_DEVICE="aliyun_ap8220"
 
 CUSTOM_LAN_IP="${CUSTOM_LAN_IP:-192.168.20.1}"
+
 CUSTOM_HOSTNAME="${CUSTOM_HOSTNAME:-JacobWrt}"
 
 
 echo
 echo "========================================================="
 echo " JacobWrt"
-echo " FG2000 / IPQ807x / LibWrt 25.12 NSS"
+echo " FG2000 + Aliyun AP8220"
+echo " IPQ807x / LibWrt 25.12 NSS"
 echo "========================================================="
 echo
 
@@ -40,8 +44,7 @@ if [ ! -d "target/linux/qualcommax" ]; then
     echo
     echo "ERROR:"
     echo "target/linux/qualcommax does not exist."
-    echo
-    echo "Upstream target layout has changed."
+
     exit 1
 
 fi
@@ -52,8 +55,7 @@ if [ ! -f "$IMAGE_FILE" ]; then
     echo
     echo "ERROR:"
     echo "$IMAGE_FILE does not exist."
-    echo
-    echo "Upstream IPQ807x image layout has changed."
+
     exit 1
 
 fi
@@ -63,22 +65,14 @@ mkdir -p "$DTS_DIR"
 
 
 # =========================================================
-# 2. NSS kernel patch policy
+# 2. NSS patch policy
 #
-# NEVER:
-#
-# find *nss*.patch
-# cp *.patch
-# rm *vxlan*.patch
-#
-# 25.12-nss owns its complete kernel patch graph.
+# NEVER modify upstream patch queue.
 # =========================================================
 
 echo
-echo "===> NSS kernel patch policy:"
-echo "     UPSTREAM MANAGED"
-echo "     NO patch injection"
-echo "     NO VXLAN patch deletion"
+echo "===> NSS kernel patches:"
+echo "     100% upstream-managed"
 
 
 PATCH_DIR="target/linux/qualcommax/patches-6.12"
@@ -94,25 +88,90 @@ if [ -d "$PATCH_DIR" ]; then
           | wc -l
     )"
 
-    echo "  -> qualcommax 6.12 patches: $PATCH_COUNT"
+    echo "  -> Patch count: $PATCH_COUNT"
 
 fi
 
 
 # =========================================================
-# 3. FG2000 DTS
+# 3. Validate AP8220 upstream profile
+#
+# AP8220 is upstream-supported.
+# We DO NOT create or override its DTS/profile.
+# =========================================================
+
+echo
+echo "===> Checking Aliyun AP8220 upstream support..."
+
+
+if grep -q \
+    '^define Device/aliyun_ap8220$' \
+    "$IMAGE_FILE"; then
+
+    echo "  -> Aliyun AP8220 device profile found."
+
+else
+
+    echo
+    echo "========================================================="
+    echo "ERROR:"
+    echo "25.12-nss does not provide Device/aliyun_ap8220"
+    echo
+    echo "Do not silently generate a replacement."
+    echo "Upstream device structure should be inspected first."
+    echo "========================================================="
+
+    exit 1
+
+fi
+
+
+# =========================================================
+# 4. Validate AP8220 WiFi board package
+# =========================================================
+
+echo
+echo "===> Checking AP8220 WiFi BDF package..."
+
+
+if grep -Rqs \
+    'aliyun_ap8220' \
+    package/firmware/ipq-wifi \
+    2>/dev/null; then
+
+    echo "  -> ipq-wifi-aliyun_ap8220 available."
+
+else
+
+    echo
+    echo "ERROR:"
+    echo "AP8220 WiFi board package is missing."
+
+    exit 1
+
+fi
+
+
+# =========================================================
+# 5. FG2000 DTS
+#
+# Priority:
+#
+# 1. upstream target DTS
+# 2. another matching FG2000/Inseego DTS
+# 3. CI repo fallback
 # =========================================================
 
 echo
 echo "===> Checking FG2000 DTS..."
 
 
-TARGET_DTS="$DTS_DIR/${DEVICE_DTS}.dts"
+TARGET_DTS="$DTS_DIR/${FG2000_DTS}.dts"
 
 
 if [ -f "$TARGET_DTS" ]; then
 
-    echo "  -> Upstream already provides:"
+    echo "  -> FG2000 DTS already exists:"
     echo "     $TARGET_DTS"
 
 else
@@ -132,7 +191,7 @@ else
 
     if [ -n "$FOUND_DTS" ]; then
 
-        echo "  -> Found compatible upstream DTS:"
+        echo "  -> Found upstream FG2000 DTS:"
         echo "     $FOUND_DTS"
 
         cp \
@@ -144,9 +203,7 @@ else
          [ -f "$GITHUB_WORKSPACE/devices/ipq8072-fg2000.dts" ]; then
 
 
-        echo "  -> Using CI repository fallback:"
-        echo "     devices/ipq8072-fg2000.dts"
-
+        echo "  -> Using CI fallback FG2000 DTS."
 
         cp \
           "$GITHUB_WORKSPACE/devices/ipq8072-fg2000.dts" \
@@ -162,8 +219,6 @@ else
         echo "Recommended fallback:"
         echo
         echo "devices/ipq8072-fg2000.dts"
-        echo
-        echo "This should contain your last-known-good FG2000 DTS."
         echo "========================================================="
 
         exit 1
@@ -174,7 +229,7 @@ fi
 
 
 # =========================================================
-# 4. NSS DTSI
+# 6. FG2000 NSS DTSI
 # =========================================================
 
 echo
@@ -202,22 +257,17 @@ else
 
     if [ -n "$FOUND_NSS_DTSI" ]; then
 
-        echo "  -> Found upstream NSS DTSI:"
-        echo "     $FOUND_NSS_DTSI"
-
         cp \
           "$FOUND_NSS_DTSI" \
           "$TARGET_NSS_DTSI"
 
+        echo "  -> NSS DTSI installed."
+
     else
 
         echo
-        echo "========================================================="
-        echo "ERROR: ipq8074-nss.dtsi not found."
-        echo
-        echo "25.12-nss IPQ807x NSS device-tree support appears"
-        echo "to have changed."
-        echo "========================================================="
+        echo "ERROR:"
+        echo "ipq8074-nss.dtsi not found."
 
         exit 1
 
@@ -227,22 +277,23 @@ fi
 
 
 # =========================================================
-# 5. Device profile
+# 7. FG2000 device profile
 # =========================================================
 
 echo
-echo "===> Checking FG2000 device profile..."
+echo "===> Checking FG2000 profile..."
 
 
 if grep -q \
     '^define Device/inseego_fg2000$' \
     "$IMAGE_FILE"; then
 
-    echo "  -> FG2000 profile already exists upstream."
+    echo "  -> FG2000 profile already exists."
 
 else
 
-    echo "  -> Installing FG2000 profile."
+    echo "  -> Adding FG2000 profile."
+
 
     cat >> "$IMAGE_FILE" <<'EOF'
 
@@ -255,6 +306,7 @@ define Device/inseego_fg2000
   DEVICE_VENDOR := Inseego
   DEVICE_MODEL := FG2000
   DEVICE_DTS := ipq8072-fg2000
+
   DEVICE_PACKAGES := \
     kmod-qca-nss-dp \
     kmod-qca-nss-drv \
@@ -262,6 +314,7 @@ define Device/inseego_fg2000
     kmod-qca-nss-ecm \
     kmod-tun \
     kmod-dummy
+
 endef
 
 TARGET_DEVICES += inseego_fg2000
@@ -270,18 +323,8 @@ EOF
 fi
 
 
-if ! grep -q \
-    '^define Device/inseego_fg2000$' \
-    "$IMAGE_FILE"; then
-
-    echo "ERROR: Failed to register FG2000 profile."
-    exit 1
-
-fi
-
-
 # =========================================================
-# 6. Network defaults
+# 8. Network defaults
 # =========================================================
 
 CONFIG_GENERATE="package/base-files/files/bin/config_generate"
@@ -292,13 +335,6 @@ echo "===> Configuring LAN IP..."
 
 
 if [ -f "$CONFIG_GENERATE" ]; then
-
-    # 兼容可能出现的：
-    #
-    # 192.168.1.1
-    # 192.168.2.1
-    #
-    # 只修改 OpenWrt LAN 默认地址模式。
 
     if grep -Eq \
       '192\.168\.(1|2)\.1' \
@@ -312,23 +348,16 @@ if [ -f "$CONFIG_GENERATE" ]; then
 
     else
 
-        echo "  -> INFO:"
-        echo "     Upstream LAN template changed."
+        echo "  -> Upstream default LAN pattern changed."
         echo "     No unsafe replacement performed."
 
     fi
-
-else
-
-    echo "  -> INFO:"
-    echo "     config_generate not found."
-    echo "     LAN IP modification skipped."
 
 fi
 
 
 # =========================================================
-# 7. Hostname
+# 9. Hostname
 # =========================================================
 
 echo
@@ -347,24 +376,14 @@ if [ -f "$CONFIG_GENERATE" ]; then
 
         echo "  -> Hostname: $CUSTOM_HOSTNAME"
 
-    else
-
-        echo "  -> INFO:"
-        echo "     hostname definition changed upstream."
-        echo "     Hostname customization skipped."
-
     fi
 
 fi
 
 
 # =========================================================
-# 8. Cleanup generated metadata
+# 10. Clean generated package metadata
 # =========================================================
-
-echo
-echo "===> Cleaning package metadata..."
-
 
 rm -rf \
   tmp/info \
@@ -379,7 +398,7 @@ sed -i \
 
 
 # =========================================================
-# 9. Package helpers
+# 11. Package helpers
 # =========================================================
 
 package_dir_exists() {
@@ -408,9 +427,8 @@ clone_if_missing() {
     if package_dir_exists "$name"; then
 
         echo
-        echo "===> $name"
-        echo "     Already provided by 25.12-nss."
-        echo "     Keep upstream package."
+        echo "===> $name already provided upstream."
+        echo "     Keep upstream version."
 
         return 0
 
@@ -419,7 +437,6 @@ clone_if_missing() {
 
     echo
     echo "===> Installing $name"
-    echo "     $repo"
 
 
     rm -rf "$dest"
@@ -434,10 +451,7 @@ clone_if_missing() {
 
 
 # =========================================================
-# 10. Mihomo
-#
-# 25.12-nss may already provide mihomo.
-# Don't override if present.
+# 12. Mihomo
 # =========================================================
 
 echo
@@ -446,12 +460,9 @@ echo "===> Checking Mihomo..."
 
 if package_dir_exists "mihomo"; then
 
-    echo "  -> Mihomo already provided upstream."
-    echo "     Keep 25.12-nss version."
+    echo "  -> Keep upstream Mihomo."
 
 else
-
-    echo "  -> Installing external Mihomo package."
 
     TMP_MIHOMO="$(mktemp -d)"
 
@@ -488,10 +499,7 @@ fi
 
 
 # =========================================================
-# 11. Aurora
-#
-# 25.12-nss reportedly uses Aurora by default.
-# Do NOT override upstream if it already exists.
+# 13. Themes / applications
 # =========================================================
 
 clone_if_missing \
@@ -499,10 +507,6 @@ clone_if_missing \
   https://github.com/eamonxg/luci-theme-aurora.git \
   package/luci-theme-aurora
 
-
-# =========================================================
-# 12. Argon
-# =========================================================
 
 clone_if_missing \
   luci-theme-argon \
@@ -516,10 +520,6 @@ clone_if_missing \
   package/luci-app-argon-config
 
 
-# =========================================================
-# 13. Lucky
-# =========================================================
-
 clone_if_missing \
   luci-app-lucky \
   https://github.com/gdy666/luci-app-lucky.git \
@@ -527,40 +527,21 @@ clone_if_missing \
 
 
 # =========================================================
-# 14. LuCI branding
-#
-# Keep upstream JavaScript unchanged.
-# =========================================================
-
-echo
-echo "===> LuCI branding policy:"
-echo "     Keep upstream LuCI implementation."
-
-
-# =========================================================
-# 15. Final validation
+# 14. Final validation
 # =========================================================
 
 echo
 echo "========================================================="
-echo " FG2000 / IPQ807x / 25.12 NSS validation"
+echo " Dual Device Validation"
 echo "========================================================="
 
+
+# FG2000
 
 if [ ! -f "$TARGET_DTS" ]; then
 
-    echo "ERROR: Missing:"
-    echo "$TARGET_DTS"
-
-    exit 1
-
-fi
-
-
-if [ ! -f "$TARGET_NSS_DTSI" ]; then
-
-    echo "ERROR: Missing:"
-    echo "$TARGET_NSS_DTSI"
+    echo "ERROR:"
+    echo "FG2000 DTS missing."
 
     exit 1
 
@@ -571,18 +552,35 @@ if ! grep -q \
     '^define Device/inseego_fg2000$' \
     "$IMAGE_FILE"; then
 
-    echo "ERROR: Missing FG2000 image profile."
+    echo "ERROR:"
+    echo "FG2000 profile missing."
+
+    exit 1
+
+fi
+
+
+# AP8220
+
+if ! grep -q \
+    '^define Device/aliyun_ap8220$' \
+    "$IMAGE_FILE"; then
+
+    echo "ERROR:"
+    echo "AP8220 profile missing."
+
     exit 1
 
 fi
 
 
 echo
-echo "Device:"
-echo "  Inseego FG2000"
+echo "Devices:"
+echo "  ✓ Inseego FG2000"
+echo "  ✓ Aliyun AP8220"
 
 echo
-echo "DTS:"
+echo "FG2000 DTS:"
 echo "  $TARGET_DTS"
 
 echo
@@ -590,30 +588,19 @@ echo "NSS DTSI:"
 echo "  $TARGET_NSS_DTSI"
 
 echo
-echo "LAN:"
-echo "  $CUSTOM_LAN_IP"
+echo "Nikki runtime:"
+echo "  ✓ kmod-dummy"
+echo "  ✓ kmod-tun"
 
 echo
-echo "Hostname:"
-echo "  $CUSTOM_HOSTNAME"
+echo "NSS patches:"
+echo "  ✓ upstream-managed"
 
 echo
-echo "Mandatory runtime:"
-echo "  kmod-dummy"
-echo "  kmod-tun"
-
-echo
-echo "NSS:"
-echo "  kmod-qca-nss-dp"
-echo "  kmod-qca-nss-drv"
-echo "  kmod-qca-nss-drv-pppoe"
-echo "  kmod-qca-nss-ecm"
-
-echo
-echo "Kernel patches:"
-echo "  100% upstream-managed"
+echo "AP8220 WiFi:"
+echo "  ✓ ipq-wifi-aliyun_ap8220"
 
 echo
 echo "========================================================="
-echo " Jacob 25.12 customization completed successfully."
+echo " Jacob dual-device customization completed."
 echo "========================================================="
