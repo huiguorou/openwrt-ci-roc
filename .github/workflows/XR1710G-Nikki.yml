@@ -85,28 +85,35 @@ jobs:
           cp "${CONFIG_FILE}" openwrt/.config
           cd openwrt
 
-          # Force critical symbols through OpenWrt's config helper instead of
-          # relying only on raw .config lines surviving make defconfig.
-          ./scripts/config --enable TARGET_airoha
-          ./scripts/config --enable TARGET_airoha_an7581
-          ./scripts/config --enable TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi
+          # YYH2913/OpenWrt has scripts/config as a directory, not a helper executable.
+          # Set symbols directly in .config, then let make defconfig resolve dependencies.
+          set_y() {
+            local sym="$1"
+            sed -i -e "/^CONFIG_${sym}=/d" -e "/^# CONFIG_${sym} is not set$/d" .config
+            echo "CONFIG_${sym}=y" >> .config
+          }
 
-          ./scripts/config --enable LUCI_LANG_zh_Hans
+          set_y TARGET_airoha
+          set_y TARGET_airoha_an7581
+          set_y TARGET_airoha_an7581_DEVICE_gemtek_xr1710g-ubi
 
-          ./scripts/config --enable PACKAGE_nikki
-          ./scripts/config --enable PACKAGE_luci-app-nikki
+          set_y LUCI_LANG_zh_Hans
 
-          ./scripts/config --enable PACKAGE_kmod-dummy
-          ./scripts/config --enable PACKAGE_kmod-tun
-          ./scripts/config --enable PACKAGE_kmod-inet-diag
-          ./scripts/config --enable PACKAGE_kmod-nft-socket
-          ./scripts/config --enable PACKAGE_kmod-nft-tproxy
-          ./scripts/config --enable PACKAGE_ca-bundle
-          ./scripts/config --enable PACKAGE_curl
-          ./scripts/config --enable PACKAGE_yq
-          ./scripts/config --enable PACKAGE_firewall4
-          ./scripts/config --enable PACKAGE_ip-full
-          ./scripts/config --enable PACKAGE_mihomo
+          set_y PACKAGE_nikki
+          set_y PACKAGE_luci-app-nikki
+          set_y PACKAGE_luci-i18n-nikki-zh-cn
+
+          set_y PACKAGE_kmod-dummy
+          set_y PACKAGE_kmod-tun
+          set_y PACKAGE_kmod-inet-diag
+          set_y PACKAGE_kmod-nft-socket
+          set_y PACKAGE_kmod-nft-tproxy
+          set_y PACKAGE_ca-bundle
+          set_y PACKAGE_curl
+          set_y PACKAGE_yq
+          set_y PACKAGE_firewall4
+          set_y PACKAGE_ip-full
+          set_y PACKAGE_mihomo
 
           make defconfig
 
@@ -117,7 +124,7 @@ jobs:
           grep -E '^CONFIG_LUCI_LANG_zh_Hans=' .config || true
 
           echo "===== Nikki / required dependencies ====="
-          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki|mihomo|kmod-dummy|kmod-tun|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
+          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki[^=]*|mihomo|kmod-dummy|kmod-tun|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
 
       - name: Validate critical config
         working-directory: openwrt
