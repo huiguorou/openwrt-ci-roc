@@ -1,4 +1,4 @@
-name: IPQ807X-LibWrt 25.12 NSS (Pure Wired NSS)
+name: IPQ807X-LibWrt 25.12 NSS
 
 on:
   workflow_dispatch:
@@ -21,13 +21,21 @@ env:
   DIY_SCRIPT: scripts/Jacob-script.sh
 
   # =====================================================
-  # Device
+  # Devices
   # =====================================================
-  DEVICE_NAME: inseego_fg2000
+  FG2000_DEVICE: inseego_fg2000
+  AP8220_DEVICE: aliyun_ap8220
+
+  # =====================================================
+  # Release
+  #
+  # 使用固定 tag，但每次追加新 artifact
+  # =====================================================
   FIRMWARE_TAG: IPQ807X-25.12-NSS
 
-  # 保留你自己的 LAN 地址。
-  # 如果以后想使用上游 192.168.2.1，只改这里。
+  # =====================================================
+  # System customization
+  # =====================================================
   CUSTOM_LAN_IP: 192.168.20.1
   CUSTOM_HOSTNAME: JacobWrt
 
@@ -35,7 +43,9 @@ env:
 
 
 jobs:
+
   Build:
+
     runs-on: ubuntu-24.04
 
     permissions:
@@ -44,7 +54,7 @@ jobs:
     steps:
 
     # =====================================================
-    # 1. Runner
+    # 1. Runner information
     # =====================================================
 
     - name: Check Server Performance
@@ -99,7 +109,6 @@ jobs:
           ccache \
           upx-ucl
 
-        # LibWrt/OpenWrt dependency helper
         curl -fsSL \
           ophub.org/ubuntu2404-make-openwrt-depends \
           -o /tmp/openwrt-depends
@@ -122,7 +131,7 @@ jobs:
 
 
     # =====================================================
-    # 3. Checkout your CI repo
+    # 3. Checkout CI repo
     # =====================================================
 
     - name: Checkout CI Repository
@@ -131,8 +140,6 @@ jobs:
 
     # =====================================================
     # 4. Clone latest 25.12-nss
-    #
-    # 每次构建都获取当前 upstream HEAD。
     # =====================================================
 
     - name: Clone Latest 25.12 NSS Source
@@ -144,7 +151,6 @@ jobs:
         sudo chown -R "$(id -u):$(id -g)" /mnt/openwrt
 
         echo "=========================================="
-        echo "Cloning LibWrt upstream"
         echo "Repository : $REPO_URL"
         echo "Branch     : $REPO_BRANCH"
         echo "=========================================="
@@ -160,13 +166,16 @@ jobs:
 
         CURRENT_BRANCH="$(git branch --show-current)"
         SOURCE_HASH="$(git rev-parse HEAD)"
-        SOURCE_SHORT_HASH="$(git rev-parse --short HEAD)"
+        SOURCE_SHORT_HASH="$(git rev-parse --short=8 HEAD)"
 
         if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
+
           echo "ERROR:"
           echo "Expected branch: $REPO_BRANCH"
           echo "Actual branch  : $CURRENT_BRANCH"
+
           exit 1
+
         fi
 
         echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
@@ -174,6 +183,7 @@ jobs:
         echo "SOURCE_SHORT_HASH=$SOURCE_SHORT_HASH" >> "$GITHUB_ENV"
 
         SOURCE_REPO="$(basename "$REPO_URL" .git)"
+
         echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
 
         VERSION_INFO="$(
@@ -191,12 +201,7 @@ jobs:
 
 
     # =====================================================
-    # 5. Detect actual kernel
-    #
-    # 支持：
-    # LINUX_VERSION-6.12 = .103
-    # LINUX_VERSION-6.12 = .104
-    # ...
+    # 5. Detect kernel version
     # =====================================================
 
     - name: Detect Kernel Version
@@ -208,13 +213,18 @@ jobs:
         KERNEL_FILE="target/linux/generic/kernel-6.12"
 
         if [ ! -f "$KERNEL_FILE" ]; then
+
           echo "ERROR: $KERNEL_FILE not found."
           echo "Upstream may have moved away from Linux 6.12."
+
           exit 1
+
         fi
 
         echo "========= Kernel definition ========="
+
         cat "$KERNEL_FILE"
+
         echo "====================================="
 
         VERSION_PATCH="$(
@@ -225,8 +235,11 @@ jobs:
         )"
 
         if [ -z "$VERSION_PATCH" ]; then
+
           echo "ERROR: Cannot detect Linux 6.12 patch version."
+
           exit 1
+
         fi
 
         VERSION_KERNEL="6.12.${VERSION_PATCH}"
@@ -238,7 +251,31 @@ jobs:
 
 
     # =====================================================
-    # 6. Configure feeds
+    # 6. Generate unique build ID
+    #
+    # run number + kernel + source commit
+    #
+    # 这样 Release 中永远不会覆盖历史文件。
+    # =====================================================
+
+    - name: Generate Build ID
+      run: |
+        set -Eeuo pipefail
+
+        BUILD_DATE="$(date +'%Y%m%d-%H%M%S')"
+
+        BUILD_ID="k${VERSION_KERNEL}-${SOURCE_SHORT_HASH}-r${GITHUB_RUN_NUMBER}-${BUILD_DATE}"
+
+        echo "BUILD_DATE=$BUILD_DATE" >> "$GITHUB_ENV"
+        echo "BUILD_ID=$BUILD_ID" >> "$GITHUB_ENV"
+
+        echo
+        echo "Build ID:"
+        echo "$BUILD_ID"
+
+
+    # =====================================================
+    # 7. Configure feeds
     # =====================================================
 
     - name: Configure Feeds
@@ -247,8 +284,8 @@ jobs:
 
         cd "$OPENWRT_PATH"
 
-        # Nikki feed 不存在才加入
-        if ! grep -qE '^src-git(-full)?[[:space:]]+nikki[[:space:]]' \
+        if ! grep -qE \
+          '^src-git(-full)?[[:space:]]+nikki[[:space:]]' \
           feeds.conf.default; then
 
           echo \
@@ -264,9 +301,7 @@ jobs:
 
 
     # =====================================================
-    # 7. Update feeds
-    #
-    # 先 update，保证 Jacob-script 可以检测上游 package。
+    # 8. Update feeds
     # =====================================================
 
     - name: Update Feeds
@@ -279,7 +314,7 @@ jobs:
 
 
     # =====================================================
-    # 8. Jacob customization
+    # 9. Apply customizations
     # =====================================================
 
     - name: Apply Jacob Customization
@@ -298,10 +333,7 @@ jobs:
 
 
     # =====================================================
-    # 9. Install feeds
-    #
-    # 当前 25.12-nss upstream 自己仍推荐 install -a。
-    # warning 不等于 build failure。
+    # 10. Install feeds
     # =====================================================
 
     - name: Install Feeds
@@ -314,7 +346,7 @@ jobs:
 
 
     # =====================================================
-    # 10. Generate .config
+    # 11. Generate build configuration
     # =====================================================
 
     - name: Generate Build Configuration
@@ -329,9 +361,9 @@ jobs:
           > .config
 
 
-        # =================================================
-        # Remove mutually exclusive proxy stacks
-        # =================================================
+        # -------------------------------------------------
+        # Remove conflicting proxy stacks
+        # -------------------------------------------------
 
         sed -i \
           -e '/CONFIG_PACKAGE_.*passwall/d' \
@@ -346,11 +378,12 @@ jobs:
           .config || true
 
 
-        # =================================================
-        # Config helper
-        # =================================================
+        # -------------------------------------------------
+        # helper
+        # -------------------------------------------------
 
         set_config_y() {
+
           local symbol="$1"
 
           sed -i \
@@ -359,11 +392,20 @@ jobs:
             .config
 
           echo "${symbol}=y" >> .config
+
         }
 
 
         # =================================================
-        # Device
+        # Target
+        # =================================================
+
+        set_config_y CONFIG_TARGET_qualcommax
+        set_config_y CONFIG_TARGET_qualcommax_ipq807x
+
+
+        # =================================================
+        # Device 1: FG2000
         # =================================================
 
         set_config_y \
@@ -371,31 +413,44 @@ jobs:
 
 
         # =================================================
-        # Nikki mandatory runtime dependencies
+        # Device 2: Aliyun AP8220
+        #
+        # upstream official profile
+        # =================================================
+
+        set_config_y \
+          CONFIG_TARGET_qualcommax_ipq807x_DEVICE_aliyun_ap8220
+
+
+        # =================================================
+        # Nikki required runtime
         # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-inet-diag
+
         set_config_y CONFIG_PACKAGE_kmod-tun
 
-        # 必须
+        # Nikki mandatory dependency
         set_config_y CONFIG_PACKAGE_kmod-dummy
 
         set_config_y CONFIG_PACKAGE_libncurses
 
 
         # =================================================
-        # NSS mandatory components
+        # NSS
         # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-dp
+
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-drv
+
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
+
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-ecm
 
 
         # =================================================
-        # shortcut-fe:
-        # 如果 25.12 upstream 仍提供才启用
+        # shortcut-fe optional
         # =================================================
 
         if grep -Rqs \
@@ -407,28 +462,62 @@ jobs:
 
         else
 
-          echo "INFO: kmod-shortcut-fe is not present."
-          echo "NSS ECM will be used without forcing shortcut-fe."
+          echo "INFO:"
+          echo "kmod-shortcut-fe not available."
+          echo "Continue using NSS ECM."
+
+        fi
+
+
+        # =================================================
+        # AP8220 wireless board package
+        #
+        # 保证 AP8220 BDF 被编译。
+        # =================================================
+
+        if grep -Rqs \
+          'aliyun_ap8220' \
+          package/firmware/ipq-wifi \
+          2>/dev/null; then
+
+          set_config_y CONFIG_PACKAGE_ipq-wifi-aliyun_ap8220
+
+        else
+
+          echo
+          echo "ERROR:"
+          echo "ipq-wifi-aliyun_ap8220 does not exist."
+          echo
+          echo "25.12-nss AP8220 WiFi support changed."
+          exit 1
 
         fi
 
 
         # =================================================
         # 5G modem
+        #
+        # FG2000 needs these.
+        # AP8220 carrying them is harmless.
         # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-usb-net-qmi-wwan
+
         set_config_y CONFIG_PACKAGE_kmod-usb-net-cdc-mbim
+
         set_config_y CONFIG_PACKAGE_kmod-mhi-net
+
         set_config_y CONFIG_PACKAGE_kmod-mhi-pci-generic
 
         set_config_y CONFIG_PACKAGE_modemmanager
+
         set_config_y CONFIG_PACKAGE_luci-proto-modemmanager
+
         set_config_y CONFIG_PACKAGE_usbutils
 
 
         # =================================================
-        # Optional modem UI
+        # Modemband optional
         # =================================================
 
         if find package feeds \
@@ -447,34 +536,30 @@ jobs:
         # =================================================
 
         set_config_y CONFIG_PACKAGE_nikki
+
         set_config_y CONFIG_PACKAGE_luci-app-nikki
 
 
         # =================================================
-        # Resolve dependencies
+        # Resolve
         # =================================================
 
         make defconfig
 
 
         echo
-        echo "================ Target ================"
-
-        grep '^CONFIG_TARGET_BOARD=' \
-          .config || true
-
-        grep '^CONFIG_TARGET_SUBTARGET=' \
-          .config || true
+        echo "================ Devices ================="
 
         grep \
-          '^CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000=y$' \
-          .config || true
+          '^CONFIG_TARGET_qualcommax_ipq807x_DEVICE_.*=y' \
+          .config \
+          || true
 
-        echo "========================================"
+        echo "=========================================="
 
 
     # =====================================================
-    # 11. Critical configuration validation
+    # 12. Validate both devices + critical dependencies
     # =====================================================
 
     - name: Validate Critical Configuration
@@ -482,6 +567,7 @@ jobs:
         set -Eeuo pipefail
 
         cd "$OPENWRT_PATH"
+
 
         require_config() {
 
@@ -496,33 +582,58 @@ jobs:
             echo "Missing:"
             echo "  $symbol"
             echo
-            echo "Upstream 25.12-nss may have renamed or"
-            echo "removed this component."
+            echo "Upstream 25.12-nss may have changed."
             echo "=========================================="
 
             exit 1
 
           fi
+
         }
 
 
-        # Device
+        # -------------------------------------------------
+        # Devices
+        # -------------------------------------------------
+
         require_config \
           CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000
 
+        require_config \
+          CONFIG_TARGET_qualcommax_ipq807x_DEVICE_aliyun_ap8220
 
+
+        # -------------------------------------------------
         # NSS
+        # -------------------------------------------------
+
         require_config CONFIG_PACKAGE_kmod-qca-nss-dp
+
         require_config CONFIG_PACKAGE_kmod-qca-nss-drv
+
         require_config CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
+
         require_config CONFIG_PACKAGE_kmod-qca-nss-ecm
 
 
-        # Nikki runtime
+        # -------------------------------------------------
+        # Nikki
+        # -------------------------------------------------
+
         require_config CONFIG_PACKAGE_kmod-dummy
+
         require_config CONFIG_PACKAGE_kmod-tun
+
         require_config CONFIG_PACKAGE_nikki
+
         require_config CONFIG_PACKAGE_luci-app-nikki
+
+
+        # -------------------------------------------------
+        # AP8220 WiFi
+        # -------------------------------------------------
+
+        require_config CONFIG_PACKAGE_ipq-wifi-aliyun_ap8220
 
 
         DEVICE_TARGET="$(
@@ -537,25 +648,49 @@ jobs:
             .config
         )"
 
+
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_ENV"
+
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_ENV"
 
 
         echo
-        echo "========== Critical components =========="
+        echo "=============== Devices ================"
+
+        echo "FG2000:"
+        grep \
+          '^CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000=y$' \
+          .config
+
+        echo
+
+        echo "Aliyun AP8220:"
+        grep \
+          '^CONFIG_TARGET_qualcommax_ipq807x_DEVICE_aliyun_ap8220=y$' \
+          .config
+
+        echo
+        echo "============== Nikki ==================="
 
         grep -E \
-          '^CONFIG_PACKAGE_(kmod-dummy|kmod-tun|nikki|luci-app-nikki|kmod-qca-nss.*)=y$' \
-          .config \
-          || true
+          '^CONFIG_PACKAGE_(kmod-dummy|kmod-tun|nikki|luci-app-nikki)=y$' \
+          .config
 
-        echo "========================================="
+        echo
+        echo "=============== NSS ===================="
+
+        grep -E \
+          '^CONFIG_PACKAGE_kmod-qca-nss.*=y$' \
+          .config || true
+
+        echo
+        echo "========================================"
 
 
     # =====================================================
-    # 12. Cache
+    # 13. Cache
     #
-    # staging_dir intentionally NOT cached.
+    # Do NOT cache staging_dir
     # =====================================================
 
     - name: Cache Downloads And Ccache
@@ -574,7 +709,7 @@ jobs:
 
 
     # =====================================================
-    # 13. Download
+    # 14. Download
     # =====================================================
 
     - name: Download Packages
@@ -585,7 +720,6 @@ jobs:
 
         make download -j"$(nproc)"
 
-        # Remove obviously broken downloads
         find dl \
           -type f \
           -size -1024c \
@@ -594,9 +728,7 @@ jobs:
 
 
     # =====================================================
-    # 14. Kernel patch preflight
-    #
-    # 不修改 patch queue，只验证 upstream。
+    # 15. Kernel patch preflight
     # =====================================================
 
     - name: Kernel Patch Preflight
@@ -621,7 +753,7 @@ jobs:
 
 
     # =====================================================
-    # 15. Compile
+    # 16. Compile
     # =====================================================
 
     - name: Compile Firmware
@@ -633,7 +765,11 @@ jobs:
 
         echo
         echo "============================================="
-        echo "Building FG2000"
+        echo "Building:"
+        echo
+        echo "  Inseego FG2000"
+        echo "  Aliyun AP8220"
+        echo
         echo "Branch : $REPO_BRANCH"
         echo "Kernel : $VERSION_KERNEL"
         echo "Threads: $(nproc)"
@@ -643,8 +779,8 @@ jobs:
         if ! make -j"$(nproc)"; then
 
           echo
-          echo "Parallel compilation failed."
-          echo "Retrying once with -j1 V=s..."
+          echo "Parallel build failed."
+          echo "Retrying with -j1 V=s..."
           echo
 
           make -j1 V=s
@@ -658,13 +794,9 @@ jobs:
           "DATE=$(date +'%Y-%m-%d %H:%M:%S')" \
           >> "$GITHUB_ENV"
 
-        echo \
-          "FILE_DATE=$(date +'%Y.%m.%d')" \
-          >> "$GITHUB_ENV"
-
 
     # =====================================================
-    # 16. Disk status
+    # 17. Disk
     # =====================================================
 
     - name: Check Space Usage
@@ -674,68 +806,136 @@ jobs:
 
 
     # =====================================================
-    # 17. Organize firmware
+    # 18. Organize release artifacts
+    #
+    # 关键：
+    #
+    # 所有文件加入 BUILD_ID。
+    #
+    # 因此即使 Release 使用固定 tag，
+    # 不同 build 也永远不会出现同名文件。
     # =====================================================
 
-    - name: Organize Files
+    - name: Organize Release Files
       if: steps.compile.outputs.status == 'success'
       run: |
         set -Eeuo pipefail
 
+        TARGET_DIR="$OPENWRT_PATH/bin/targets/qualcommax/ipq807x"
 
-        TARGET_DIR="$(
-          find "$OPENWRT_PATH/bin/targets" \
-            -mindepth 2 \
-            -maxdepth 2 \
-            -type d \
-            | head -n1
-        )"
+        if [ ! -d "$TARGET_DIR" ]; then
 
+          echo "ERROR:"
+          echo "Target output directory not found:"
+          echo "$TARGET_DIR"
 
-        if [ -z "$TARGET_DIR" ]; then
-          echo "ERROR: target output directory not found."
           exit 1
+
         fi
 
 
-        cd "$TARGET_DIR"
+        RELEASE_DIR="$OPENWRT_PATH/release-files"
 
+        rm -rf "$RELEASE_DIR"
+        mkdir -p "$RELEASE_DIR"
+
+
+        echo
+        echo "============================================="
+        echo "Collect firmware files"
+        echo "============================================="
+
+
+        # -------------------------------------------------
+        # FG2000 images
+        # -------------------------------------------------
+
+        find "$TARGET_DIR" \
+          -maxdepth 1 \
+          -type f \
+          -iname '*inseego*fg2000*' \
+          -print0 \
+        | while IFS= read -r -d '' file; do
+
+            BASE="$(basename "$file")"
+
+            cp \
+              "$file" \
+              "$RELEASE_DIR/${BUILD_ID}-${BASE}"
+
+        done
+
+
+        # -------------------------------------------------
+        # AP8220 images
+        # -------------------------------------------------
+
+        find "$TARGET_DIR" \
+          -maxdepth 1 \
+          -type f \
+          -iname '*aliyun*ap8220*' \
+          -print0 \
+        | while IFS= read -r -d '' file; do
+
+            BASE="$(basename "$file")"
+
+            cp \
+              "$file" \
+              "$RELEASE_DIR/${BUILD_ID}-${BASE}"
+
+        done
+
+
+        # -------------------------------------------------
+        # Build config
+        # -------------------------------------------------
 
         cp \
           "$OPENWRT_PATH/.config" \
-          IPQ807X.config
+          "$RELEASE_DIR/${BUILD_ID}-IPQ807X.config"
 
 
-        if [ -f config.buildinfo ]; then
+        # -------------------------------------------------
+        # Buildinfo
+        # -------------------------------------------------
 
-          mv \
-            config.buildinfo \
-            IPQ807X.config.buildinfo
-
-        fi
-
-
-        MANIFEST="$(
-          find . \
-            -maxdepth 1 \
-            -type f \
-            -name '*.manifest' \
-            | head -n1 \
-            || true
-        )"
-
-
-        if [ -n "$MANIFEST" ]; then
+        if [ -f "$TARGET_DIR/config.buildinfo" ]; then
 
           cp \
-            "$MANIFEST" \
-            IPQ807X.manifest
+            "$TARGET_DIR/config.buildinfo" \
+            "$RELEASE_DIR/${BUILD_ID}-config.buildinfo"
 
         fi
 
 
+        # -------------------------------------------------
+        # Manifest
+        # -------------------------------------------------
+
+        find "$TARGET_DIR" \
+          -maxdepth 1 \
+          -type f \
+          -name '*.manifest' \
+          -print0 \
+        | while IFS= read -r -d '' file; do
+
+            BASE="$(basename "$file")"
+
+            cp \
+              "$file" \
+              "$RELEASE_DIR/${BUILD_ID}-${BASE}"
+
+        done
+
+
+        # -------------------------------------------------
         # Package archive
-        mkdir -p packages
+        # -------------------------------------------------
+
+        PACKAGE_TMP="$OPENWRT_PATH/package-archive"
+
+        rm -rf "$PACKAGE_TMP"
+        mkdir -p "$PACKAGE_TMP"
 
 
         if [ -d "$OPENWRT_PATH/bin/packages" ]; then
@@ -747,93 +947,198 @@ jobs:
               -o \
               -name '*.ipk' \
             \) \
-            -exec cp {} packages/ \; \
+            -exec cp {} "$PACKAGE_TMP/" \; \
             2>/dev/null || true
 
         fi
 
 
         tar -zcf \
-          IPQ807X.Packages.tar.gz \
-          packages
+          "$RELEASE_DIR/${BUILD_ID}-IPQ807X-Packages.tar.gz" \
+          -C "$PACKAGE_TMP" .
 
 
-        rm -rf packages
+        rm -rf "$PACKAGE_TMP"
 
 
-        rm -f \
-          feeds.buildinfo \
-          version.buildinfo \
-          sha256sums \
-          profiles.json \
-          2>/dev/null || true
+        # -------------------------------------------------
+        # Build information text
+        # -------------------------------------------------
+
+        cat > "$RELEASE_DIR/${BUILD_ID}-BUILD-INFO.txt" <<EOF
+
+        LibWrt IPQ807X NSS Build
+
+        Build ID:
+        $BUILD_ID
+
+        Build Date:
+        $DATE
+
+        Source:
+        $REPO_URL
+
+        Branch:
+        $REPO_BRANCH
+
+        Commit:
+        $SOURCE_HASH
+
+        Kernel:
+        $VERSION_KERNEL
+
+        Devices:
+        - Inseego FG2000
+        - Aliyun AP8220
+
+        NSS:
+        Enabled
+
+        Nikki:
+        Enabled
+
+        kmod-dummy:
+        Enabled
+
+        kmod-tun:
+        Enabled
+
+        EOF
 
 
-        echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
+        # -------------------------------------------------
+        # Sanity check
+        # -------------------------------------------------
+
+        FG_COUNT="$(
+          find "$RELEASE_DIR" \
+            -type f \
+            -iname '*fg2000*' \
+            | wc -l
+        )"
+
+        AP_COUNT="$(
+          find "$RELEASE_DIR" \
+            -type f \
+            -iname '*ap8220*' \
+            | wc -l
+        )"
 
 
         echo
-        echo "========== Firmware output =========="
-        ls -lh
-        echo "====================================="
+        echo "FG2000 artifacts : $FG_COUNT"
+        echo "AP8220 artifacts : $AP_COUNT"
+
+
+        if [ "$FG_COUNT" -eq 0 ]; then
+
+          echo "ERROR:"
+          echo "No FG2000 firmware produced."
+
+          exit 1
+
+        fi
+
+
+        if [ "$AP_COUNT" -eq 0 ]; then
+
+          echo "ERROR:"
+          echo "No AP8220 firmware produced."
+
+          exit 1
+
+        fi
+
+
+        echo
+        echo "============= Release files ============="
+
+        ls -lh "$RELEASE_DIR"
+
+        echo "========================================="
+
+
+        echo \
+          "FIRMWARE_PATH=$RELEASE_DIR" \
+          >> "$GITHUB_ENV"
 
 
     # =====================================================
-    # 18. Release
+    # 19. Append files to existing Release
+    #
+    # IMPORTANT:
+    #
+    # allowUpdates: true
+    # replacesArtifacts: false
+    # removeArtifacts: false
+    #
+    # 老文件不会被删除或覆盖。
     # =====================================================
 
-    - name: Upload Firmware To Release
+    - name: Append Firmware To Release
       if: steps.compile.outputs.status == 'success'
+
       uses: ncipollo/release-action@v1
 
       with:
 
-        name: ${{ env.DATE }} - FG2000 25.12 NSS
+        tag: ${{ env.FIRMWARE_TAG }}
+
+        name: IPQ807X 25.12 NSS Rolling Builds
 
         allowUpdates: true
-        replacesArtifacts: true
 
-        tag: ${{ env.FIRMWARE_TAG }}
+        # 核心：
+        # 不覆盖同名 artifact
+        replacesArtifacts: false
+
+        # 也绝不清除旧 artifact
+        removeArtifacts: false
+
+        # 已存在 release 时保留原有名称
+        omitNameDuringUpdate: true
 
         token: ${{ secrets.GITHUB_TOKEN }}
 
         artifacts: ${{ env.FIRMWARE_PATH }}/*
 
+        artifactErrorsFailBuild: true
+
         body: |
-          **Custom LibWrt Firmware for Inseego FG2000**
+          **LibWrt 25.12 NSS IPQ807X Builds**
 
-          ### Platform
+          此 Release 持续累积历史构建文件，不覆盖之前版本。
 
-          - SoC: Qualcomm IPQ8072 / IPQ807x
-          - Source: LibWrt
-          - Branch: **${{ env.REPO_BRANCH }}**
+          ### Current build
+
+          - Build ID: `${{ env.BUILD_ID }}`
           - Kernel: **${{ env.VERSION_KERNEL }}**
-          - NSS: Full NSS enabled
-          - NSS ECM: Enabled
-          - NSS PPPoE: Enabled
+          - Branch: **${{ env.REPO_BRANCH }}**
+          - Commit: `${{ env.SOURCE_SHORT_HASH }}`
 
-          ### Proxy
+          ### Devices
+
+          - Inseego FG2000
+          - Aliyun AP8220
+
+          ### NSS
+
+          - qca-nss-dp
+          - qca-nss-drv
+          - qca-nss-drv-pppoe
+          - qca-nss-ecm
+
+          ### Nikki
 
           - Nikki
-          - kmod-tun: Enabled
-          - kmod-dummy: **Enabled / Required**
+          - kmod-tun
+          - kmod-dummy **mandatory**
 
-          ### 5G
+          ### Network
 
-          - MHI
-          - QMI WWAN
-          - MBIM
-          - ModemManager
-
-          ### System
-
-          - Hostname: ${{ env.CUSTOM_HOSTNAME }}
           - Default IP: **${{ env.CUSTOM_LAN_IP }}**
-          - Password: none
+          - Hostname: `${{ env.CUSTOM_HOSTNAME }}`
 
           ### Source
-
-          - Commit: `${{ env.SOURCE_HASH }}`
-          - Short commit: `${{ env.SOURCE_SHORT_HASH }}`
 
           ${{ env.VERSION_INFO }}
