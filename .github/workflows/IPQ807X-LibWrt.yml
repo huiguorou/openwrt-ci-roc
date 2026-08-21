@@ -110,13 +110,36 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         run: |
           set -Eeuo pipefail
-          mkdir -p $OPENWRT_PATH/release-files
-          TARGET=$OPENWRT_PATH/bin/targets/qualcommax/ipq807x
+          TARGET="$OPENWRT_PATH/bin/targets/qualcommax/ipq807x"
+          OUT="$OPENWRT_PATH/release-files"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          test -d "$TARGET" || { echo "ERROR: Missing target output: $TARGET"; exit 1; }
 
-          find "$TARGET" -maxdepth 1 -type f -exec cp {} "$OPENWRT_PATH/release-files/${BUILD_ID}-{}" \; || true
-          cp $OPENWRT_PATH/.config $OPENWRT_PATH/release-files/${BUILD_ID}-config
+          count=0
+          while IFS= read -r -d '' file; do
+            base="$(basename "$file")"
+            case "$base" in
+              *fg2000*|*FG2000*|*inseego*|*ap8220*|*AP8220*|*aliyun*)
+                cp "$file" "$OUT/${BUILD_ID}-${base}"
+                count=$((count + 1))
+                ;;
+            esac
+          done < <(find "$TARGET" -maxdepth 1 -type f -print0)
 
-          echo "FIRMWARE_PATH=$OPENWRT_PATH/release-files" >> $GITHUB_ENV
+          cp "$OPENWRT_PATH/.config" "$OUT/${BUILD_ID}-config"
+          [ -f "$TARGET/config.buildinfo" ] && cp "$TARGET/config.buildinfo" "$OUT/${BUILD_ID}-config.buildinfo" || true
+          [ -f "$TARGET/sha256sums" ] && cp "$TARGET/sha256sums" "$OUT/${BUILD_ID}-sha256sums" || true
+
+          echo "Collected firmware files: $count"
+          ls -lh "$OUT"
+
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: No FG2000/AP8220 firmware images found."
+            echo "Available target files:"
+            find "$TARGET" -maxdepth 1 -type f -printf '%f\n' | sort
+            exit 1
+          fi
 
       - name: Upload Release
         if: steps.compile.outputs.status == 'success'
@@ -128,4 +151,5 @@ jobs:
           allowUpdates: true
           replacesArtifacts: false
           removeArtifacts: false
-          artifacts: ${{ env.FIRMWARE_PATH }}/*
+          artifacts: /mnt/openwrt/release-files/*
+          artifactErrorsFailBuild: true
