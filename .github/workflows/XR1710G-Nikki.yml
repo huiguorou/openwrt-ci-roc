@@ -113,7 +113,7 @@ jobs:
           set_y PACKAGE_yq
           set_y PACKAGE_firewall4
           set_y PACKAGE_ip-full
-          set_y PACKAGE_mihomo
+          set_y PACKAGE_mihomo-meta
 
           make defconfig
 
@@ -124,7 +124,7 @@ jobs:
           grep -E '^CONFIG_LUCI_LANG_zh_Hans=' .config || true
 
           echo "===== Nikki / required dependencies ====="
-          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki[^=]*|mihomo|kmod-dummy|kmod-tun|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
+          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki[^=]*|mihomo-meta|mihomo-alpha|kmod-dummy|kmod-tun|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
 
       - name: Validate critical config
         working-directory: openwrt
@@ -143,7 +143,7 @@ jobs:
             'CONFIG_PACKAGE_kmod-inet-diag=y'
             'CONFIG_PACKAGE_kmod-nft-socket=y'
             'CONFIG_PACKAGE_kmod-nft-tproxy=y'
-            'CONFIG_PACKAGE_mihomo=y'
+            'CONFIG_PACKAGE_mihomo-meta=y'
           )
 
           for item in "${required[@]}"; do
@@ -154,6 +154,16 @@ jobs:
               exit 1
             }
           done
+
+          echo "===== Mihomo provider ====="
+          if grep -Fxq 'CONFIG_PACKAGE_mihomo-meta=y' .config; then
+            echo "mihomo-meta selected (recommended/default Nikki provider)"
+          elif grep -Fxq 'CONFIG_PACKAGE_mihomo-alpha=y' .config; then
+            echo "mihomo-alpha selected"
+          else
+            echo "::error::No concrete Mihomo provider selected"
+            exit 1
+          fi
 
           # Translation is useful but is not allowed to block the firmware build.
           # With current LuCI, zh_Hans maps to package suffix zh-cn.
@@ -232,7 +242,7 @@ jobs:
             - Target: `airoha/an7581`
             - Device: `gemtek_xr1710g-ubi`
             - Nikki: included
-            - Mihomo: included
+            - Mihomo provider: mihomo-meta
             - kmod-dummy: included
             - kmod-tun: included
           files: firmware/*
