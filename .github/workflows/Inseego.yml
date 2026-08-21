@@ -1,4 +1,4 @@
-name: IPQ807X-LibWrt
+name: IPQ807X-LibWrt 25.12 NSS (Pure Wired NSS)
 
 on:
   workflow_dispatch:
@@ -7,15 +7,32 @@ on:
   #   - cron: "0 18 * * *"
 
 env:
+  # =====================================================
+  # Upstream
+  # =====================================================
   REPO_URL: https://github.com/laipeng668/openwrt-6.x.git
-  REPO_BRANCH: main-nss
+  REPO_BRANCH: 25.12-nss
 
+  # =====================================================
+  # Local CI configuration
+  # =====================================================
   CONFIG_FILE: configs/IPQ807X.config
   GENERAL_CONFIG_FILE: configs/General.config
   DIY_SCRIPT: scripts/Jacob-script.sh
 
-  FIRMWARE_TAG: IPQ807X
+  # =====================================================
+  # Device
+  # =====================================================
+  DEVICE_NAME: inseego_fg2000
+  FIRMWARE_TAG: IPQ807X-25.12-NSS
+
+  # 保留你自己的 LAN 地址。
+  # 如果以后想使用上游 192.168.2.1，只改这里。
+  CUSTOM_LAN_IP: 192.168.20.1
+  CUSTOM_HOSTNAME: JacobWrt
+
   TZ: Asia/Shanghai
+
 
 jobs:
   Build:
@@ -27,11 +44,13 @@ jobs:
     steps:
 
     # =====================================================
-    # 1. Runner 信息
+    # 1. Runner
     # =====================================================
 
     - name: Check Server Performance
       run: |
+        set -Eeuo pipefail
+
         echo "================ CPU ================"
         nproc
         lscpu || true
@@ -41,12 +60,12 @@ jobs:
         free -h
 
         echo
-        echo "=============== Disk ================="
+        echo "================ Disk ================"
         df -hT
 
 
     # =====================================================
-    # 2. 初始化 Ubuntu
+    # 2. Build environment
     # =====================================================
 
     - name: Initialization Environment
@@ -80,14 +99,17 @@ jobs:
           ccache \
           upx-ucl
 
-        curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends \
+        # LibWrt/OpenWrt dependency helper
+        curl -fsSL \
+          ophub.org/ubuntu2404-make-openwrt-depends \
           -o /tmp/openwrt-depends
 
-        sudo -E apt-get install -y $(cat /tmp/openwrt-depends)
+        sudo -E apt-get install -y \
+          $(cat /tmp/openwrt-depends)
 
         sudo timedatectl set-timezone "$TZ"
 
-        # 8GB Swap
+        # 8 GB swap
         sudo swapoff /swapfile 2>/dev/null || true
         sudo rm -f /swapfile
 
@@ -100,7 +122,7 @@ jobs:
 
 
     # =====================================================
-    # 3. Checkout CI Repository
+    # 3. Checkout your CI repo
     # =====================================================
 
     - name: Checkout CI Repository
@@ -108,12 +130,12 @@ jobs:
 
 
     # =====================================================
-    # 4. 拉取 main-nss 最新源码
+    # 4. Clone latest 25.12-nss
     #
-    # 每次 workflow 都拉取最新 upstream commit。
+    # 每次构建都获取当前 upstream HEAD。
     # =====================================================
 
-    - name: Clone Latest Upstream Source
+    - name: Clone Latest 25.12 NSS Source
       run: |
         set -Eeuo pipefail
 
@@ -121,9 +143,11 @@ jobs:
         sudo mkdir -p /mnt/openwrt
         sudo chown -R "$(id -u):$(id -g)" /mnt/openwrt
 
-        echo "===> Clone latest upstream"
-        echo "Repo   : $REPO_URL"
-        echo "Branch : $REPO_BRANCH"
+        echo "=========================================="
+        echo "Cloning LibWrt upstream"
+        echo "Repository : $REPO_URL"
+        echo "Branch     : $REPO_BRANCH"
+        echo "=========================================="
 
         git clone \
           --depth 1 \
@@ -135,61 +159,138 @@ jobs:
         cd /mnt/openwrt
 
         CURRENT_BRANCH="$(git branch --show-current)"
-        CURRENT_HASH="$(git rev-parse HEAD)"
+        SOURCE_HASH="$(git rev-parse HEAD)"
+        SOURCE_SHORT_HASH="$(git rev-parse --short HEAD)"
 
         if [ "$CURRENT_BRANCH" != "$REPO_BRANCH" ]; then
-          echo "ERROR: Expected branch $REPO_BRANCH but got $CURRENT_BRANCH"
+          echo "ERROR:"
+          echo "Expected branch: $REPO_BRANCH"
+          echo "Actual branch  : $CURRENT_BRANCH"
           exit 1
         fi
 
         echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
-        echo "SOURCE_HASH=$CURRENT_HASH" >> "$GITHUB_ENV"
+        echo "SOURCE_HASH=$SOURCE_HASH" >> "$GITHUB_ENV"
+        echo "SOURCE_SHORT_HASH=$SOURCE_SHORT_HASH" >> "$GITHUB_ENV"
 
         SOURCE_REPO="$(basename "$REPO_URL" .git)"
         echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
 
-        VERSION_INFO="$(git show -s \
-          --date=short \
-          --format='作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H')"
+        VERSION_INFO="$(
+          git show -s \
+            --date=short \
+            --format='作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H'
+        )"
 
         echo "VERSION_INFO=$VERSION_INFO" >> "$GITHUB_ENV"
 
         echo
-        echo "============ Upstream ============"
+        echo "=============== Upstream ================="
         git log -1 --oneline
-        echo "=================================="
+        echo "=========================================="
 
 
     # =====================================================
-    # 5. Feed 配置
+    # 5. Detect actual kernel
+    #
+    # 支持：
+    # LINUX_VERSION-6.12 = .103
+    # LINUX_VERSION-6.12 = .104
+    # ...
+    # =====================================================
+
+    - name: Detect Kernel Version
+      run: |
+        set -Eeuo pipefail
+
+        cd "$OPENWRT_PATH"
+
+        KERNEL_FILE="target/linux/generic/kernel-6.12"
+
+        if [ ! -f "$KERNEL_FILE" ]; then
+          echo "ERROR: $KERNEL_FILE not found."
+          echo "Upstream may have moved away from Linux 6.12."
+          exit 1
+        fi
+
+        echo "========= Kernel definition ========="
+        cat "$KERNEL_FILE"
+        echo "====================================="
+
+        VERSION_PATCH="$(
+          sed -n \
+            's/^LINUX_VERSION-6\.12[[:space:]]*=[[:space:]]*\.\([0-9][0-9]*\).*$/\1/p' \
+            "$KERNEL_FILE" \
+            | head -n1
+        )"
+
+        if [ -z "$VERSION_PATCH" ]; then
+          echo "ERROR: Cannot detect Linux 6.12 patch version."
+          exit 1
+        fi
+
+        VERSION_KERNEL="6.12.${VERSION_PATCH}"
+
+        echo
+        echo "Detected kernel: $VERSION_KERNEL"
+
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> "$GITHUB_ENV"
+
+
+    # =====================================================
+    # 6. Configure feeds
     # =====================================================
 
     - name: Configure Feeds
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
-        if ! grep -q '^src-git nikki ' feeds.conf.default; then
+        # Nikki feed 不存在才加入
+        if ! grep -qE '^src-git(-full)?[[:space:]]+nikki[[:space:]]' \
+          feeds.conf.default; then
+
           echo \
             'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' \
             >> feeds.conf.default
+
         fi
 
-        echo "===== feeds.conf.default ====="
+        echo
+        echo "========== feeds.conf.default =========="
         cat feeds.conf.default
+        echo "========================================"
 
 
     # =====================================================
-    # 6. 应用 Jacob 自定义
+    # 7. Update feeds
     #
-    # 不修改 kernel NSS patch queue。
+    # 先 update，保证 Jacob-script 可以检测上游 package。
     # =====================================================
 
-    - name: Apply Jacob Customization
+    - name: Update Feeds
       run: |
         set -Eeuo pipefail
 
-        chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        cd "$OPENWRT_PATH"
+
+        ./scripts/feeds update -a
+
+
+    # =====================================================
+    # 8. Jacob customization
+    # =====================================================
+
+    - name: Apply Jacob Customization
+      env:
+        CUSTOM_LAN_IP: ${{ env.CUSTOM_LAN_IP }}
+        CUSTOM_HOSTNAME: ${{ env.CUSTOM_HOSTNAME }}
+      run: |
+        set -Eeuo pipefail
+
+        chmod +x \
+          "$GITHUB_WORKSPACE/$DIY_SCRIPT"
 
         cd "$OPENWRT_PATH"
 
@@ -197,20 +298,23 @@ jobs:
 
 
     # =====================================================
-    # 7. 更新并安装 feeds
+    # 9. Install feeds
+    #
+    # 当前 25.12-nss upstream 自己仍推荐 install -a。
+    # warning 不等于 build failure。
     # =====================================================
 
-    - name: Update And Install Feeds
+    - name: Install Feeds
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
-        ./scripts/feeds update -a
         ./scripts/feeds install -a
 
 
     # =====================================================
-    # 8. 生成最终配置
+    # 10. Generate .config
     # =====================================================
 
     - name: Generate Build Configuration
@@ -225,9 +329,9 @@ jobs:
           > .config
 
 
-        # -----------------------------------------------
-        # 清理互斥代理组件
-        # -----------------------------------------------
+        # =================================================
+        # Remove mutually exclusive proxy stacks
+        # =================================================
 
         sed -i \
           -e '/CONFIG_PACKAGE_.*passwall/d' \
@@ -242,9 +346,9 @@ jobs:
           .config || true
 
 
-        # -----------------------------------------------
-        # Helper
-        # -----------------------------------------------
+        # =================================================
+        # Config helper
+        # =================================================
 
         set_config_y() {
           local symbol="$1"
@@ -258,29 +362,30 @@ jobs:
         }
 
 
-        # -----------------------------------------------
-        # FG2000
-        # -----------------------------------------------
+        # =================================================
+        # Device
+        # =================================================
 
         set_config_y \
           CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000
 
 
-        # -----------------------------------------------
-        # Nikki 强制依赖
-        #
-        # kmod-dummy 必须存在。
-        # -----------------------------------------------
+        # =================================================
+        # Nikki mandatory runtime dependencies
+        # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-inet-diag
         set_config_y CONFIG_PACKAGE_kmod-tun
+
+        # 必须
         set_config_y CONFIG_PACKAGE_kmod-dummy
+
         set_config_y CONFIG_PACKAGE_libncurses
 
 
-        # -----------------------------------------------
-        # NSS 核心
-        # -----------------------------------------------
+        # =================================================
+        # NSS mandatory components
+        # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-dp
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-drv
@@ -288,32 +393,43 @@ jobs:
         set_config_y CONFIG_PACKAGE_kmod-qca-nss-ecm
 
 
-        # shortcut-fe 为可选组件
+        # =================================================
+        # shortcut-fe:
+        # 如果 25.12 upstream 仍提供才启用
+        # =================================================
+
         if grep -Rqs \
-          'KernelPackage/shortcut-fe\|Package/kmod-shortcut-fe' \
+          -e 'KernelPackage/shortcut-fe' \
+          -e 'Package/kmod-shortcut-fe' \
           package feeds 2>/dev/null; then
 
           set_config_y CONFIG_PACKAGE_kmod-shortcut-fe
 
         else
 
-          echo "INFO: kmod-shortcut-fe not present upstream; skip."
+          echo "INFO: kmod-shortcut-fe is not present."
+          echo "NSS ECM will be used without forcing shortcut-fe."
 
         fi
 
 
-        # -----------------------------------------------
+        # =================================================
         # 5G modem
-        # -----------------------------------------------
+        # =================================================
 
         set_config_y CONFIG_PACKAGE_kmod-usb-net-qmi-wwan
         set_config_y CONFIG_PACKAGE_kmod-usb-net-cdc-mbim
         set_config_y CONFIG_PACKAGE_kmod-mhi-net
         set_config_y CONFIG_PACKAGE_kmod-mhi-pci-generic
+
         set_config_y CONFIG_PACKAGE_modemmanager
         set_config_y CONFIG_PACKAGE_luci-proto-modemmanager
         set_config_y CONFIG_PACKAGE_usbutils
 
+
+        # =================================================
+        # Optional modem UI
+        # =================================================
 
         if find package feeds \
           -type d \
@@ -326,86 +442,87 @@ jobs:
         fi
 
 
-        # -----------------------------------------------
+        # =================================================
         # Nikki
-        # -----------------------------------------------
+        # =================================================
 
         set_config_y CONFIG_PACKAGE_nikki
         set_config_y CONFIG_PACKAGE_luci-app-nikki
 
 
-        # -----------------------------------------------
-        # 解析 Kconfig
-        # -----------------------------------------------
+        # =================================================
+        # Resolve dependencies
+        # =================================================
 
         make defconfig
 
-        echo
-        echo "========== Target =========="
 
-        grep '^CONFIG_TARGET_BOARD=' .config || true
-        grep '^CONFIG_TARGET_SUBTARGET=' .config || true
-        grep \
-          'CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000=y' \
+        echo
+        echo "================ Target ================"
+
+        grep '^CONFIG_TARGET_BOARD=' \
           .config || true
+
+        grep '^CONFIG_TARGET_SUBTARGET=' \
+          .config || true
+
+        grep \
+          '^CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000=y$' \
+          .config || true
+
+        echo "========================================"
 
 
     # =====================================================
-    # 9. 检查关键依赖
-    #
-    # kmod-dummy / kmod-tun / Nikki / NSS 均为强制。
+    # 11. Critical configuration validation
     # =====================================================
 
     - name: Validate Critical Configuration
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
         require_config() {
+
           local symbol="$1"
 
           if ! grep -q "^${symbol}=y$" .config; then
 
             echo
-            echo "=============================================="
-            echo "ERROR: Required configuration is unavailable:"
+            echo "=========================================="
+            echo "CRITICAL CONFIGURATION FAILURE"
             echo
+            echo "Missing:"
             echo "  $symbol"
             echo
-            echo "Upstream may have renamed or removed it."
-            echo "=============================================="
+            echo "Upstream 25.12-nss may have renamed or"
+            echo "removed this component."
+            echo "=========================================="
 
             exit 1
+
           fi
         }
 
 
+        # Device
         require_config \
           CONFIG_TARGET_qualcommax_ipq807x_DEVICE_inseego_fg2000
 
-        require_config \
-          CONFIG_PACKAGE_kmod-qca-nss-dp
 
-        require_config \
-          CONFIG_PACKAGE_kmod-qca-nss-drv
+        # NSS
+        require_config CONFIG_PACKAGE_kmod-qca-nss-dp
+        require_config CONFIG_PACKAGE_kmod-qca-nss-drv
+        require_config CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
+        require_config CONFIG_PACKAGE_kmod-qca-nss-ecm
 
-        require_config \
-          CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe
 
-        require_config \
-          CONFIG_PACKAGE_kmod-qca-nss-ecm
-
-        require_config \
-          CONFIG_PACKAGE_kmod-dummy
-
-        require_config \
-          CONFIG_PACKAGE_kmod-tun
-
-        require_config \
-          CONFIG_PACKAGE_nikki
-
-        require_config \
-          CONFIG_PACKAGE_luci-app-nikki
+        # Nikki runtime
+        require_config CONFIG_PACKAGE_kmod-dummy
+        require_config CONFIG_PACKAGE_kmod-tun
+        require_config CONFIG_PACKAGE_nikki
+        require_config CONFIG_PACKAGE_luci-app-nikki
 
 
         DEVICE_TARGET="$(
@@ -423,60 +540,28 @@ jobs:
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_ENV"
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_ENV"
 
-        echo
-        echo "Target    : $DEVICE_TARGET"
-        echo "Subtarget : $DEVICE_SUBTARGET"
 
         echo
-        echo "Critical Nikki/NSS dependencies:"
-        grep \
-          -E \
-          'CONFIG_PACKAGE_(kmod-dummy|kmod-tun|nikki|luci-app-nikki|kmod-qca-nss)' \
+        echo "========== Critical components =========="
+
+        grep -E \
+          '^CONFIG_PACKAGE_(kmod-dummy|kmod-tun|nikki|luci-app-nikki|kmod-qca-nss.*)=y$' \
           .config \
           || true
 
-
-    # =====================================================
-    # 10. 检测 Kernel Version
-    # =====================================================
-
-    - name: Detect Kernel Version
-      run: |
-        set -Eeuo pipefail
-        cd "$OPENWRT_PATH"
-
-        VERSION_KERNEL=""
-
-        if [ -f target/linux/generic/kernel-6.12 ]; then
-
-          VERSION_KERNEL="$(
-            grep -oE \
-              '[0-9]+\.[0-9]+\.[0-9]+' \
-              target/linux/generic/kernel-6.12 \
-              | head -n1 \
-              || true
-          )"
-
-        fi
-
-        if [ -z "$VERSION_KERNEL" ]; then
-          VERSION_KERNEL="6.12.x"
-        fi
-
-        echo "VERSION_KERNEL=$VERSION_KERNEL" >> "$GITHUB_ENV"
-        echo "Kernel: $VERSION_KERNEL"
+        echo "========================================="
 
 
     # =====================================================
-    # 11. Cache
+    # 12. Cache
     #
-    # 不缓存 staging_dir。
-    # 避免上游更新之后 ABI/toolchain/header 污染。
+    # staging_dir intentionally NOT cached.
     # =====================================================
 
     - name: Cache Downloads And Ccache
       uses: actions/cache@v4
       with:
+
         path: |
           ${{ env.OPENWRT_PATH }}/dl
           ${{ env.OPENWRT_PATH }}/.ccache
@@ -489,17 +574,18 @@ jobs:
 
 
     # =====================================================
-    # 12. 下载源码
+    # 13. Download
     # =====================================================
 
     - name: Download Packages
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
         make download -j"$(nproc)"
 
-        # 删除异常下载文件
+        # Remove obviously broken downloads
         find dl \
           -type f \
           -size -1024c \
@@ -508,20 +594,23 @@ jobs:
 
 
     # =====================================================
-    # 13. Kernel patch preflight
+    # 14. Kernel patch preflight
     #
-    # 如果上游 patch queue 真有问题，在这里提前失败。
+    # 不修改 patch queue，只验证 upstream。
     # =====================================================
 
     - name: Kernel Patch Preflight
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
         echo
-        echo "==============================================="
-        echo "Checking upstream kernel patch queue..."
-        echo "==============================================="
+        echo "============================================="
+        echo "Kernel Patch Preflight"
+        echo "Branch : $REPO_BRANCH"
+        echo "Kernel : $VERSION_KERNEL"
+        echo "============================================="
 
         make target/linux/clean
 
@@ -532,30 +621,36 @@ jobs:
 
 
     # =====================================================
-    # 14. 编译
+    # 15. Compile
     # =====================================================
 
     - name: Compile Firmware
       id: compile
       run: |
         set -Eeuo pipefail
+
         cd "$OPENWRT_PATH"
 
         echo
-        echo "========================================"
-        echo "$(nproc) thread compile"
-        echo "========================================"
+        echo "============================================="
+        echo "Building FG2000"
+        echo "Branch : $REPO_BRANCH"
+        echo "Kernel : $VERSION_KERNEL"
+        echo "Threads: $(nproc)"
+        echo "============================================="
+
 
         if ! make -j"$(nproc)"; then
 
           echo
-          echo "Parallel build failed."
-          echo "Retrying verbose single-thread build..."
+          echo "Parallel compilation failed."
+          echo "Retrying once with -j1 V=s..."
           echo
 
           make -j1 V=s
 
         fi
+
 
         echo "status=success" >> "$GITHUB_OUTPUT"
 
@@ -569,7 +664,7 @@ jobs:
 
 
     # =====================================================
-    # 15. 磁盘空间
+    # 16. Disk status
     # =====================================================
 
     - name: Check Space Usage
@@ -579,13 +674,14 @@ jobs:
 
 
     # =====================================================
-    # 16. 整理固件
+    # 17. Organize firmware
     # =====================================================
 
     - name: Organize Files
       if: steps.compile.outputs.status == 'success'
       run: |
         set -Eeuo pipefail
+
 
         TARGET_DIR="$(
           find "$OPENWRT_PATH/bin/targets" \
@@ -595,51 +691,75 @@ jobs:
             | head -n1
         )"
 
-        if [ -z "$TARGET_DIR" ]; then
 
+        if [ -z "$TARGET_DIR" ]; then
           echo "ERROR: target output directory not found."
           exit 1
-
         fi
 
+
         cd "$TARGET_DIR"
+
 
         cp \
           "$OPENWRT_PATH/.config" \
           IPQ807X.config
 
+
         if [ -f config.buildinfo ]; then
+
           mv \
             config.buildinfo \
             IPQ807X.config.buildinfo
+
         fi
+
 
         MANIFEST="$(
           find . \
             -maxdepth 1 \
             -type f \
             -name '*.manifest' \
-            | head -n1
+            | head -n1 \
+            || true
         )"
 
+
         if [ -n "$MANIFEST" ]; then
-          cp "$MANIFEST" IPQ807X.manifest
+
+          cp \
+            "$MANIFEST" \
+            IPQ807X.manifest
+
         fi
 
 
+        # Package archive
         mkdir -p packages
 
-        find "$OPENWRT_PATH/bin/packages/" \
-          -type f \
-          \( -name '*.apk' -o -name '*.ipk' \) \
-          -exec cp {} packages/ \; \
-          2>/dev/null || true
+
+        if [ -d "$OPENWRT_PATH/bin/packages" ]; then
+
+          find "$OPENWRT_PATH/bin/packages/" \
+            -type f \
+            \( \
+              -name '*.apk' \
+              -o \
+              -name '*.ipk' \
+            \) \
+            -exec cp {} packages/ \; \
+            2>/dev/null || true
+
+        fi
+
 
         tar -zcf \
           IPQ807X.Packages.tar.gz \
           packages
 
+
         rm -rf packages
+
 
         rm -f \
           feeds.buildinfo \
@@ -648,40 +768,72 @@ jobs:
           profiles.json \
           2>/dev/null || true
 
+
         echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
 
 
+        echo
+        echo "========== Firmware output =========="
+        ls -lh
+        echo "====================================="
+
+
     # =====================================================
-    # 17. 发布 Release
+    # 18. Release
     # =====================================================
 
     - name: Upload Firmware To Release
       if: steps.compile.outputs.status == 'success'
       uses: ncipollo/release-action@v1
+
       with:
-        name: ${{ env.DATE }} for Inseego FG2000
+
+        name: ${{ env.DATE }} - FG2000 25.12 NSS
+
         allowUpdates: true
         replacesArtifacts: true
+
         tag: ${{ env.FIRMWARE_TAG }}
+
         token: ${{ secrets.GITHUB_TOKEN }}
+
         artifacts: ${{ env.FIRMWARE_PATH }}/*
+
         body: |
-          **Custom OpenWrt Firmware for Inseego FG2000**
+          **Custom LibWrt Firmware for Inseego FG2000**
 
-          ### 固件信息
+          ### Platform
 
-          - Target: Qualcomm IPQ807x
-          - Device: Inseego FG2000
-          - NSS: Enabled
-          - Proxy: Nikki
-          - Nikki dummy interface: Enabled
-          - Default IP: 192.168.20.1
-          - Default password: none
+          - SoC: Qualcomm IPQ8072 / IPQ807x
+          - Source: LibWrt
+          - Branch: **${{ env.REPO_BRANCH }}**
+          - Kernel: **${{ env.VERSION_KERNEL }}**
+          - NSS: Full NSS enabled
+          - NSS ECM: Enabled
+          - NSS PPPoE: Enabled
 
-          ### Build
+          ### Proxy
 
-          - Kernel: ${{ env.VERSION_KERNEL }}
-          - Source branch: ${{ env.REPO_BRANCH }}
-          - Source commit: ${{ env.SOURCE_HASH }}
+          - Nikki
+          - kmod-tun: Enabled
+          - kmod-dummy: **Enabled / Required**
+
+          ### 5G
+
+          - MHI
+          - QMI WWAN
+          - MBIM
+          - ModemManager
+
+          ### System
+
+          - Hostname: ${{ env.CUSTOM_HOSTNAME }}
+          - Default IP: **${{ env.CUSTOM_LAN_IP }}**
+          - Password: none
+
+          ### Source
+
+          - Commit: `${{ env.SOURCE_HASH }}`
+          - Short commit: `${{ env.SOURCE_SHORT_HASH }}`
 
           ${{ env.VERSION_INFO }}
