@@ -77,6 +77,27 @@ jobs:
           find feeds/nikki -maxdepth 3 -type d \
             \( -name nikki -o -name luci-app-nikki -o -name zh_Hans \) -print || true
 
+      - name: Set default LAN IP
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+
+          CONFIG_GENERATE="package/base-files/files/bin/config_generate"
+          test -f "${CONFIG_GENERATE}"
+
+          echo "===== Original LAN default ====="
+          grep -n '192\.168\.1\.1' "${CONFIG_GENERATE}" || true
+
+          sed -i 's/192\.168\.1\.1/192.168.30.1/g' "${CONFIG_GENERATE}"
+
+          grep -q '192\.168\.30\.1' "${CONFIG_GENERATE}" || {
+            echo "::error::Failed to set default LAN IP to 192.168.30.1"
+            exit 1
+          }
+
+          echo "===== New LAN default ====="
+          grep -n '192\.168\.30\.1' "${CONFIG_GENERATE}"
+
       - name: Apply XR1710G and Nikki config
         run: |
           set -euo pipefail
@@ -105,6 +126,7 @@ jobs:
 
           set_y PACKAGE_kmod-dummy
           set_y PACKAGE_kmod-tun
+          set_y PACKAGE_kmod-nf-conntrack-netlink
           set_y PACKAGE_kmod-inet-diag
           set_y PACKAGE_kmod-nft-socket
           set_y PACKAGE_kmod-nft-tproxy
@@ -124,7 +146,7 @@ jobs:
           grep -E '^CONFIG_LUCI_LANG_zh_Hans=' .config || true
 
           echo "===== Nikki / required dependencies ====="
-          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki[^=]*|mihomo-meta|mihomo-alpha|kmod-dummy|kmod-tun|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
+          grep -E '^CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki[^=]*|mihomo-meta|mihomo-alpha|kmod-dummy|kmod-tun|kmod-nf-conntrack-netlink|kmod-inet-diag|kmod-nft-socket|kmod-nft-tproxy)=' .config || true
 
       - name: Validate critical config
         working-directory: openwrt
@@ -140,6 +162,7 @@ jobs:
             'CONFIG_PACKAGE_luci-app-nikki=y'
             'CONFIG_PACKAGE_kmod-dummy=y'
             'CONFIG_PACKAGE_kmod-tun=y'
+            'CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y'
             'CONFIG_PACKAGE_kmod-inet-diag=y'
             'CONFIG_PACKAGE_kmod-nft-socket=y'
             'CONFIG_PACKAGE_kmod-nft-tproxy=y'
@@ -214,6 +237,8 @@ jobs:
             echo "upstream_ref=${{ inputs.upstream_ref }}"
             echo "upstream_commit=${UPSTREAM_COMMIT}"
             echo "nikki_feed=nikkinikki-org/OpenWrt-nikki@main"
+            echo "default_lan_ip=192.168.30.1/24"
+            echo "openclash_dependency=kmod-nf-conntrack-netlink"
             echo "build_date=${BUILD_DATE}"
           } > "${OUT}/BUILD-INFO.txt"
 
@@ -241,8 +266,15 @@ jobs:
             - Upstream commit: `${{ env.UPSTREAM_COMMIT }}`
             - Target: `airoha/an7581`
             - Device: `gemtek_xr1710g-ubi`
+            - Default LAN IP: `192.168.30.1/24`
             - Nikki: included
-            - Mihomo provider: mihomo-meta
+            - Mihomo provider: `mihomo-meta`
             - kmod-dummy: included
             - kmod-tun: included
+            - kmod-nf-conntrack-netlink: included (OpenClash dependency)
+
+            ### Acknowledgements
+            Special thanks to **YYH2913** for the XR1710G / Airoha AN7581 upstream work,
+            and to all contributors of **OpenWrt**, **Airoha support**, **Nikki / Mihomo**
+            and the wider open-source community whose work makes this firmware possible.
           files: firmware/*
